@@ -1,7 +1,7 @@
 {
   "name": "kollate",
-  "version": "0.1.0",
-  "description": "Capture your Claude Code conversations into your organisation's Kollate account",
+  "version": "0.2.0",
+  "description": "Capture your Claude Code conversations into your organisation's Kollate workspace",
   "author": { "name": "Kollate" },
   "userConfig": {
     "endpoint": {
@@ -12,8 +12,8 @@
     },
     "capture_token": {
       "type": "string",
-      "title": "Capture token (fallback)",
-      "description": "Only needed on machines with no browser - normally use /kollate:connect instead. Copy it from Settings -> Connect in Kollate.",
+      "title": "Setup key (machines with no browser only)",
+      "description": "Only for SSH sessions, containers and remote machines. Everywhere else run /kollate:connect instead, which needs no copying. Get this from Connect in Kollate: 'Set up a machine without a browser'.",
       "sensitive": true
     }
   }

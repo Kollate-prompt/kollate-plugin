@@ -63,11 +63,35 @@ def write_json_private(path: str, value) -> None:
     os.replace(tmp, path)
 
 
+def unpack_machine_key(value: str) -> dict:
+    """Decode the single setup key pasted into a machine with no browser.
+
+    It carries the token, the signing secret and the connection id together, so somebody on
+    an SSH session copies one value instead of three in the right order.
+    """
+    import base64
+
+    if not value.startswith("kollate_"):
+        return {}
+    try:
+        raw = value[len("kollate_") :]
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        return {
+            "capture_token": decoded.get("t", ""),
+            "hook_secret": decoded.get("s", ""),
+            "connection_id": decoded.get("c"),
+        }
+    except Exception:
+        return {}
+
+
 def credentials() -> dict:
-    """Stored credential from /kollate:connect, else the no-browser userConfig fallback."""
+    """Stored credential from /kollate:connect, else the no-browser setup key."""
     stored = read_json(credentials_path(), {})
-    token = stored.get("capture_token") or os.environ.get("CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN", "")
-    secret = stored.get("hook_secret") or os.environ.get("CLAUDE_PLUGIN_OPTION_HOOK_SECRET", "")
+    pasted = unpack_machine_key(os.environ.get("CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN", "").strip())
+    token = stored.get("capture_token") or pasted.get("capture_token", "")
+    secret = stored.get("hook_secret") or pasted.get("hook_secret", "")
     endpoint = (
         stored.get("endpoint")
         or os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT")
@@ -131,11 +155,13 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int]:
         if not raw.strip():
             consumed += line_length
             continue
+        consumed += line_length
         try:
             record = json.loads(raw.decode("utf-8", "replace"))
         except Exception:
-            break
-        consumed += line_length
+            # A complete but unparseable line. Skip it and keep going: refusing to advance
+            # would stall this session's capture permanently, and silently, on one bad line.
+            continue
 
         if record.get("type") not in ("user", "assistant"):
             continue  # mode, attachment, system, snapshot - noise we do not store
@@ -149,6 +175,9 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int]:
                 "content": text,
                 "uuid": record.get("uuid"),
                 "sent_at": record.get("timestamp"),
+                # Where this turn ends in the file. The watermark may only ever move to a
+                # point that was actually confirmed, so each turn carries its own.
+                "_offset": consumed,
             }
         )
 
@@ -156,21 +185,28 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int]:
 
 
 def batches(turns: list[dict], first_seq: int):
-    """Number the turns and split them so no single delivery approaches the size ceiling."""
+    """Number the turns and split them so no single delivery approaches the size ceiling.
+
+    Yields (messages, offset_after_this_batch) so the caller can advance the watermark to
+    exactly what was confirmed, and not one byte further.
+    """
     batch: list[dict] = []
     size = 0
     seq = first_seq
+    end = 0
     for turn in turns:
-        numbered = dict(turn, seq=seq)
+        numbered = {k: v for k, v in turn.items() if k != "_offset"}
+        numbered["seq"] = seq
         seq += 1
         encoded = len(json.dumps(numbered))
         if batch and size + encoded > MAX_DELIVERY_BYTES:
-            yield batch
+            yield batch, end
             batch, size = [], 0
         batch.append(numbered)
         size += encoded
+        end = turn["_offset"]
     if batch:
-        yield batch
+        yield batch, end
 
 
 # ------------------------------------------------------------------------------- delivery
@@ -225,6 +261,54 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
             pass
 
 
+def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
+    """Move the mark forward, never backward, under a lock.
+
+    Two hooks can be in flight at once - a slow delivery and the next turn's fast one. Without
+    this, the slow one finishes last and writes its older, smaller offset, and the next run
+    re-reads turns that were already delivered and re-sends them under sequence numbers that
+    now belong to different content. That is worse than a duplicate: it overwrites history.
+    """
+    import fcntl
+
+    path = watermark_path()
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    lock_path = f"{path}.lock"
+    lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        marks = read_json(path, {})
+        current = marks.get(session_id) or {"offset": 0, "next_seq": 0}
+        if offset <= int(current.get("offset", 0)):
+            return  # somebody else already got further; leave their mark alone
+        marks[session_id] = {"offset": offset, "next_seq": next_seq}
+        write_json_private(path, marks)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def sweep_stale_files(max_age_seconds: int = 3600) -> None:
+    """Remove scratch files a killed worker left behind.
+
+    They hold conversation text, and nothing else ever deletes them - a machine that crashes
+    mid-delivery would otherwise accumulate transcripts on disk indefinitely.
+    """
+    now = time.time()
+    try:
+        for name in os.listdir(plugin_dir()):
+            if not name.startswith((".delivery-", ".event-")):
+                continue
+            path = os.path.join(plugin_dir(), name)
+            try:
+                if now - os.path.getmtime(path) > max_age_seconds:
+                    os.remove(path)
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
 def capture_session(transcript: str, session_id: str) -> None:
     """One session's delta, start to finish. Silent on every failure - it is a hook."""
     creds = credentials()
@@ -232,31 +316,38 @@ def capture_session(transcript: str, session_id: str) -> None:
         return
     if not os.path.isfile(transcript):
         return
-    # Never capture a transcript that predates enrolment.
+    # Enrolment. On a machine set up with a pasted key there is no connect step to stamp it,
+    # so the first captured turn stamps it instead - and that session starts from here rather
+    # than being swallowed whole. Capturing what was said before anyone enrolled is the thing
+    # §2.4 forbids; refusing to capture the session you are sitting in is just broken.
+    first_run = not os.path.exists(os.path.join(plugin_dir(), "enrolled_at"))
+    cutoff = enrolled_at()
     try:
-        if os.path.getmtime(transcript) < enrolled_at() and not os.path.getsize(transcript):
+        if first_run:
+            advance_watermark(session_id, os.path.getsize(transcript), 0)
             return
+        if os.path.getmtime(transcript) < cutoff:
+            return  # older than enrolment - never ours to take (§2.4)
     except OSError:
         return
 
-    marks = read_json(watermark_path(), {})
-    mark = marks.get(session_id) or {"offset": 0, "next_seq": 0}
+    sweep_stale_files()
 
-    turns, new_offset = turns_from(transcript, int(mark.get("offset", 0)))
+    mark = read_json(watermark_path(), {}).get(session_id) or {"offset": 0, "next_seq": 0}
+    turns, _end = turns_from(transcript, int(mark.get("offset", 0)))
     if not turns:
         return
 
     seq = int(mark.get("next_seq", 0))
-    delivered_offset = mark["offset"]
-    for batch in batches(turns, seq):
+    for batch, batch_end in batches(turns, seq):
         if not deliver(session_id, batch, creds):
-            # Leave the watermark where the last confirmed delivery left it. The next turn
+            # Leave the watermark where the last confirmed batch left it. The next turn
             # re-sends from there, and the server dedups. Nothing is lost, nothing doubles.
-            break
+            return
         seq = batch[-1]["seq"] + 1
-        delivered_offset = new_offset
-        marks[session_id] = {"offset": delivered_offset, "next_seq": seq}
-        write_json_private(watermark_path(), marks)
+        # Only as far as THIS batch reached. Advancing to the end of the whole delta here
+        # would skip the turns in a batch that has not been sent yet.
+        advance_watermark(session_id, batch_end, seq)
 
 
 def reconcile(live_session_id: str) -> None:
@@ -292,7 +383,7 @@ def reconcile(live_session_id: str) -> None:
 # ----------------------------------------------------------------------------------- main
 
 
-def read_event(timeout_seconds: float = 2.0) -> dict:
+def read_event(timeout_seconds: float = 0.5) -> dict:
     """Read the hook payload from stdin, refusing to block the person's turn on it.
 
     `select` rather than a `timeout` command, because `timeout` does not exist on macOS -
@@ -444,7 +535,13 @@ def connect() -> int:
         print("Sign-in did not complete. Nothing was changed.")
         return 1
 
-    exchange = json.dumps({"code": received["code"], "redirect_uri": redirect_uri, "label": label})
+    # If this machine has connected before, name that connection so it is rotated rather
+    # than duplicated - one laptop should be one row on the person's Connect page.
+    request = {"code": received["code"], "redirect_uri": redirect_uri, "label": label}
+    previous = read_json(credentials_path(), {}).get("connection_id")
+    if previous:
+        request["connection_id"] = previous
+    exchange = json.dumps(request)
     try:
         result = subprocess.run(
             [
