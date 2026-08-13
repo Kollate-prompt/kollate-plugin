@@ -258,6 +258,51 @@ check "setup key is declared sensitive" True "$sensitive"
 
 psql "$DB" -q -c "delete from public.conversations where session_id = '$SESSION2'"
 
+# --- crash recovery, and backfill being off by default ----------------------------------
+# A crash means no Stop hook ever ran, so nothing was spooled. Recovery is the watermark scan
+# at session start, and it must pick up what the crash left behind.
+CRASH_HOME="$WORK/crash"
+mkdir -p "$CRASH_HOME/projects/proj"
+cp "$CLAUDE_PLUGIN_DATA/credentials.json" "$WORK/crashcreds.json"
+CRASH_SESSION="plugin-crash-$$"
+CRASH_TRANSCRIPT="$CRASH_HOME/projects/proj/$CRASH_SESSION.jsonl"
+turn user "survived the crash" c1 > "$CRASH_TRANSCRIPT"
+
+# reconcile scans ~/.claude/projects, so point HOME at a fixture tree containing one
+# undelivered transcript, exactly as a machine that died mid-session would have.
+mkdir -p "$CRASH_HOME/.claude"
+mv "$CRASH_HOME/projects" "$CRASH_HOME/.claude/projects"
+CRASH_TRANSCRIPT="$CRASH_HOME/.claude/projects/proj/$CRASH_SESSION.jsonl"
+env HOME="$CRASH_HOME" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" \
+    python3 -S -E "$HOOKS/kollate.py" reconcile <<< '{"session_id":"some-other-live-session"}'
+sleep 3
+recovered_crash=$(psql "$DB" -At -c "select count(*) from public.messages m
+  join public.conversations c on c.id = m.conversation_id
+  where c.session_id = '$CRASH_SESSION' and m.content = 'survived the crash'")
+check "crash recovered at session start" 1 "$recovered_crash"
+
+# Backfill must never be something a hook does. Nothing in hooks.json may invoke it.
+hooked=$(grep -c "backfill" "$HOOKS/hooks.json" || true)
+check "backfill is not wired to any hook" 0 "$hooked"
+
+# And when run deliberately, it is bounded.
+BF_HOME="$WORK/backfill"
+mkdir -p "$BF_HOME/.claude/projects/proj"
+for i in 1 2 3; do
+  turn user "old conversation $i" "bf$i" > "$BF_HOME/.claude/projects/proj/plugin-bf$i-$$.jsonl"
+  touch -t 202001010000 "$BF_HOME/.claude/projects/proj/plugin-bf$i-$$.jsonl"
+done
+env HOME="$BF_HOME" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" \
+    python3 -S -E "$HOOKS/kollate.py" backfill --limit=2 > "$WORK/backfill.out" 2>&1
+sleep 3
+sent=$(psql "$DB" -At -c "select count(*) from public.conversations where session_id like 'plugin-bf%'")
+check "backfill sends only its limit"    2 "$sent"
+grep -q "not sent" "$WORK/backfill.out" \
+  && { printf '  ok   %-46s %s\n' "backfill says what it left behind" "reported"; pass=$((pass+1)); } \
+  || { printf '  FAIL %-46s %s\n' "backfill says what it left behind" "silent"; fail=$((fail+1)); }
+
+psql "$DB" -q -c "delete from public.conversations where session_id like 'plugin-bf%' or session_id = '$CRASH_SESSION'"
+
 # --- credentials on disk ---------------------------------------------------------------
 mode=$(stat -f '%Lp' "$CLAUDE_PLUGIN_DATA/credentials.json" 2>/dev/null || stat -c '%a' "$CLAUDE_PLUGIN_DATA/credentials.json")
 check "credentials are owner-only"  600 "$mode"

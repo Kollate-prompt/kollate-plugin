@@ -28,6 +28,9 @@ import urllib.parse
 # a large delta across several deliveries rather than failing forever on one oversized turn.
 MAX_DELIVERY_BYTES = 8 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 15
+# Backfill is bounded: the machines we measured held 378 old sessions and 1.1 GB.
+BACKFILL_DEFAULT_LIMIT = 20
+BACKFILL_MAX_LIMIT = 200
 # How long the detached worker waits for the finished turn to be flushed to the transcript.
 SETTLE_SECONDS = 0.75
 
@@ -311,7 +314,7 @@ def sweep_stale_files(max_age_seconds: int = 3600) -> None:
         return
 
 
-def capture_session(transcript: str, session_id: str) -> None:
+def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = False) -> None:
     """One session's delta, start to finish. Silent on every failure - it is a hook."""
     creds = credentials()
     if not creds["capture_token"] or not creds["hook_secret"]:
@@ -325,10 +328,10 @@ def capture_session(transcript: str, session_id: str) -> None:
     first_run = not os.path.exists(os.path.join(plugin_dir(), "enrolled_at"))
     cutoff = enrolled_at()
     try:
-        if first_run:
+        if first_run and not ignore_enrolment:
             advance_watermark(session_id, os.path.getsize(transcript), 0)
             return
-        if os.path.getmtime(transcript) < cutoff:
+        if os.path.getmtime(transcript) < cutoff and not ignore_enrolment:
             return  # older than enrolment - never ours to take (§2.4)
     except OSError:
         return
@@ -356,6 +359,53 @@ def capture_session(transcript: str, session_id: str) -> None:
         # Only as far as THIS batch reached. Advancing to the end of the whole delta here
         # would skip the turns in a batch that has not been sent yet.
         advance_watermark(session_id, batch_end, seq)
+
+
+def backfill(limit: int) -> int:
+    """Capture conversations from BEFORE this machine was enrolled. Opt-in, and bounded.
+
+    This is the one path that reaches backwards into somebody's history, so it is a command a
+    person runs deliberately, never a default, never a hook, and never silent. The batch is
+    bounded because the machines we measured held 378 old sessions and 1.1 GB - shipping that
+    in one go would be a first-run stampede as well as a surprise.
+    """
+    creds = credentials()
+    if not creds["capture_token"]:
+        print("This machine is not connected. Run /kollate:connect first.")
+        return 1
+
+    cutoff = enrolled_at()
+    marks = read_json(watermark_path(), {})
+    candidates = []
+    for directory, _subdirs, files in os.walk(os.path.expanduser("~/.claude/projects")):
+        for name in files:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(directory, name)
+            session_id = name[:-6]
+            try:
+                if os.path.getmtime(path) >= cutoff:
+                    continue  # not history - the ordinary capture path already has it
+                if os.path.getsize(path) <= int((marks.get(session_id) or {}).get("offset", 0)):
+                    continue
+            except OSError:
+                continue
+            candidates.append((os.path.getmtime(path), path, session_id))
+
+    candidates.sort(reverse=True)  # most recent history first - the useful end of it
+    selected = candidates[:limit]
+    if not selected:
+        print("No conversations from before this machine was connected.")
+        return 0
+
+    print(f"Sending {len(selected)} conversation(s) from before this machine was connected.")
+    if len(candidates) > len(selected):
+        print(f"{len(candidates) - len(selected)} older one(s) not sent - run again to continue.")
+
+    for _mtime, path, session_id in selected:
+        capture_session(path, session_id, ignore_enrolment=True)
+    print("Done.")
+    return 0
 
 
 def reconcile(live_session_id: str) -> None:
@@ -482,6 +532,19 @@ def main() -> int:
             pass
         reconcile(event.get("session_id") or event.get("sessionId") or "")
         return 0
+
+    if command == "backfill":
+        # Deliberately not a hook and not a flag anyone can set once and forget: capturing
+        # history that predates consent is exactly what the enrolment gate exists to prevent,
+        # so it only ever happens when a person runs this command on purpose (§2.4).
+        limit = BACKFILL_DEFAULT_LIMIT
+        for argument in sys.argv[2:]:
+            if argument.startswith("--limit="):
+                try:
+                    limit = max(1, min(int(argument.split("=", 1)[1]), BACKFILL_MAX_LIMIT))
+                except ValueError:
+                    pass
+        return backfill(limit)
 
     if command == "connect":
         return connect()
