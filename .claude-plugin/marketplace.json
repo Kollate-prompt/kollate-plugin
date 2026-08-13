@@ -1,0 +1,12 @@
+{
+  "name": "kollate",
+  "description": "The Kollate plugin for Claude Code: your conversations become your organisation's memory",
+  "owner": { "name": "Kollate" },
+  "plugins": [
+    {
+      "name": "kollate",
+      "source": "./plugins/kollate",
+      "description": "Capture your Claude Code conversations into your organisation's Kollate workspace"
+    }
+  ]
+}
