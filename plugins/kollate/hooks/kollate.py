@@ -28,6 +28,8 @@ import urllib.parse
 # a large delta across several deliveries rather than failing forever on one oversized turn.
 MAX_DELIVERY_BYTES = 8 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 15
+# How long the detached worker waits for the finished turn to be flushed to the transcript.
+SETTLE_SECONDS = 0.75
 
 
 # --------------------------------------------------------------------------- paths / state
@@ -330,6 +332,12 @@ def capture_session(transcript: str, session_id: str) -> None:
             return  # older than enrolment - never ours to take (§2.4)
     except OSError:
         return
+
+    # Let the turn finish landing on disk. Stop fires as Claude finishes speaking, and the
+    # assistant's own record is written around that moment - reading instantly captures the
+    # question without the answer, and the answer then waits for the next turn. This runs in
+    # the detached child, so the person is already back at their prompt and pays nothing.
+    time.sleep(SETTLE_SECONDS)
 
     sweep_stale_files()
 
