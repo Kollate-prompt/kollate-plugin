@@ -97,11 +97,7 @@ def credentials() -> dict:
     pasted = unpack_machine_key(os.environ.get("CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN", "").strip())
     token = stored.get("capture_token") or pasted.get("capture_token", "")
     secret = stored.get("hook_secret") or pasted.get("hook_secret", "")
-    endpoint = (
-        stored.get("endpoint")
-        or os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT")
-        or "https://app.kollate.ai"
-    )
+    endpoint = stored.get("endpoint") or os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or ""
     return {"capture_token": token, "hook_secret": secret, "endpoint": endpoint.rstrip("/")}
 
 
@@ -317,7 +313,7 @@ def sweep_stale_files(max_age_seconds: int = 3600) -> None:
 def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = False) -> None:
     """One session's delta, start to finish. Silent on every failure - it is a hook."""
     creds = credentials()
-    if not creds["capture_token"] or not creds["hook_secret"]:
+    if not creds["capture_token"] or not creds["hook_secret"] or not creds["endpoint"]:
         return
     if not os.path.isfile(transcript):
         return
@@ -562,9 +558,27 @@ def connect() -> int:
     import threading
     import webbrowser
 
-    endpoint = (
-        os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or "https://app.kollate.ai"
-    ).rstrip("/")
+    endpoint = (os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or "").rstrip("/")
+    if not endpoint:
+        print(
+            "Set your Kollate address first: run /plugin, configure the kollate plugin, and\n"
+            "put your organisation's Kollate URL in 'Kollate URL'."
+        )
+        return 1
+
+    # Check the address answers before opening a browser at it. A URL that resolves to
+    # nothing would otherwise look like a sign-in that simply never completed.
+    try:
+        probe = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", endpoint],
+            capture_output=True, text=True, timeout=20,
+        )
+        if not (probe.stdout or "").strip().startswith(("2", "3", "4")):
+            print(f"{endpoint} did not respond. Check the address and try again.")
+            return 1
+    except Exception:
+        print(f"{endpoint} could not be reached. Check the address and try again.")
+        return 1
 
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))

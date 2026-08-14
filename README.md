@@ -10,6 +10,11 @@ claude plugin marketplace add Kollate-prompt/kollate-plugin
 claude plugin install kollate
 ```
 
+Then tell it where your Kollate lives — run `/plugin`, configure the kollate plugin, and set
+**Kollate URL** to your organisation's address. The plugin will not guess it: an address that
+resolves to nothing looks exactly like capture working, and that is the one failure mode worth
+refusing to ship.
+
 Then, in Claude Code:
 
 ```
