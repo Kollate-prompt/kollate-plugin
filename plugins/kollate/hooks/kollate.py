@@ -68,6 +68,36 @@ def write_json_private(path: str, value) -> None:
     os.replace(tmp, path)
 
 
+def safe_api_base(value: str) -> str:
+    """Accept a delivery address only if it is one we would be willing to send a token to.
+
+    This value decides where conversations and a bearer token get posted, and it arrives from
+    outside: a query parameter on the loopback callback, or a setup key somebody was handed.
+    The callback is already gated on a 128-bit `state` the caller cannot guess, but a value
+    that steers where secrets go should not rest on one check alone.
+
+    Returns "" for anything untrusted, which every caller treats as "do not deliver".
+    """
+    if not value:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except Exception:
+        return ""
+
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return ""
+
+    # Loopback over http is for running the checks against a local stack. Nothing else may
+    # be plaintext: a delivery address is where a bearer token goes.
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return value.rstrip("/") if parsed.scheme == "http" else ""
+    if parsed.scheme != "https":
+        return ""
+    return value.rstrip("/")
+
+
 def unpack_machine_key(value: str) -> dict:
     """Decode the single setup key pasted into a machine with no browser.
 
@@ -86,7 +116,7 @@ def unpack_machine_key(value: str) -> dict:
             "capture_token": decoded.get("t", ""),
             "hook_secret": decoded.get("s", ""),
             "connection_id": decoded.get("c"),
-            "api_base": decoded.get("a", ""),
+            "api_base": safe_api_base(decoded.get("a", "")),
         }
     except Exception:
         return {}
@@ -99,13 +129,13 @@ def credentials() -> dict:
     token = stored.get("capture_token") or pasted.get("capture_token", "")
     secret = stored.get("hook_secret") or pasted.get("hook_secret", "")
     endpoint = stored.get("endpoint") or os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or ""
-    api = stored.get("api_base") or pasted.get("api_base") or ""
+    api = safe_api_base(stored.get("api_base") or "") or pasted.get("api_base") or ""
     return {
         "capture_token": token,
         "hook_secret": secret,
         "endpoint": endpoint.rstrip("/"),
         # Deliveries go to Supabase, not to the frontend. Learned at connect time.
-        "api_base": (api or endpoint).rstrip("/"),
+        "api_base": api or safe_api_base(endpoint),
     }
 
 
@@ -624,7 +654,7 @@ def connect() -> int:
         print(f"Open this link to finish connecting:\n  {url}")
 
     thread.join(timeout=185)
-    api_base = (received.get("api") or "").rstrip("/")
+    api_base = safe_api_base(received.get("api") or "")
     if received.get("state") != state or not received.get("code"):
         print("Sign-in did not complete. Nothing was changed.")
         return 1

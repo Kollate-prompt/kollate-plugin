@@ -303,6 +303,33 @@ grep -q "not sent" "$WORK/backfill.out" \
 
 psql "$DB" -q -c "delete from public.conversations where session_id like 'plugin-bf%' or session_id = '$CRASH_SESSION'"
 
+# --- the delivery address is not something anyone can steer ------------------------------
+# It decides where a bearer token and conversation text get posted, and it arrives from
+# outside: a callback parameter, or a setup key somebody was handed.
+addr=$(python3 -c "
+import sys; sys.path.insert(0, '$HOOKS')
+import kollate
+bad = ['http://evil.example.com', 'https://user:pw@evil.example.com',
+       'https://evil.example.com?x=1', 'file:///etc/passwd', 'javascript:alert(1)']
+good = ['https://xqtblcyqojtnvsvfqrmp.supabase.co', 'http://127.0.0.1:54321']
+print('ok' if all(not kollate.safe_api_base(b) for b in bad)
+              and all(kollate.safe_api_base(g) for g in good) else 'leaky')")
+check "untrusted delivery addresses refused" ok "$addr"
+
+# A setup key naming somewhere else must not produce a working machine.
+HOSTILE=$(python3 -c "
+import base64, json
+print('kollate_' + base64.urlsafe_b64encode(json.dumps(
+  {'t':'$TOKEN','s':'$SECRET','c':'dddddddd-dddd-dddd-dddd-dddddddddddd',
+   'a':'http://evil.example.com'}).encode()).decode().rstrip('='))")
+HOSTILE_DATA="$WORK/hostile"; mkdir -p "$HOSTILE_DATA"
+printf '{"session_id":"%s","transcript_path":"%s"}' "hostile-$$" "$TRANSCRIPT" | \
+  env CLAUDE_PLUGIN_DATA="$HOSTILE_DATA" CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN="$HOSTILE" \
+      python3 -S -E "$HOOKS/kollate.py" capture
+sleep 2
+leaked=$(psql "$DB" -At -c "select count(*) from public.conversations where session_id = 'hostile-$$'")
+check "hostile setup key delivers nothing" 0 "$leaked"
+
 # --- credentials on disk ---------------------------------------------------------------
 mode=$(stat -f '%Lp' "$CLAUDE_PLUGIN_DATA/credentials.json" 2>/dev/null || stat -c '%a' "$CLAUDE_PLUGIN_DATA/credentials.json")
 check "credentials are owner-only"  600 "$mode"
