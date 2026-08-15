@@ -24,9 +24,9 @@ import sys
 import time
 import urllib.parse
 
-# One delivery is capped server-side at 10 MB. Stay under it with room to spare, and split
-# a large delta across several deliveries rather than failing forever on one oversized turn.
-MAX_DELIVERY_BYTES = 8 * 1024 * 1024
+# The server refuses anything over 4 MB. Split well under it rather than failing forever on
+# one oversized turn.
+MAX_DELIVERY_BYTES = 3 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 15
 # Backfill is bounded: the machines we measured held 378 old sessions and 1.1 GB.
 BACKFILL_DEFAULT_LIMIT = 20
@@ -86,6 +86,7 @@ def unpack_machine_key(value: str) -> dict:
             "capture_token": decoded.get("t", ""),
             "hook_secret": decoded.get("s", ""),
             "connection_id": decoded.get("c"),
+            "api_base": decoded.get("a", ""),
         }
     except Exception:
         return {}
@@ -98,7 +99,14 @@ def credentials() -> dict:
     token = stored.get("capture_token") or pasted.get("capture_token", "")
     secret = stored.get("hook_secret") or pasted.get("hook_secret", "")
     endpoint = stored.get("endpoint") or os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or ""
-    return {"capture_token": token, "hook_secret": secret, "endpoint": endpoint.rstrip("/")}
+    api = stored.get("api_base") or pasted.get("api_base") or ""
+    return {
+        "capture_token": token,
+        "hook_secret": secret,
+        "endpoint": endpoint.rstrip("/"),
+        # Deliveries go to Supabase, not to the frontend. Learned at connect time.
+        "api_base": (api or endpoint).rstrip("/"),
+    }
 
 
 def enrolled_at() -> float:
@@ -242,7 +250,7 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
             [
                 "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                 "--max-time", str(CONNECT_TIMEOUT_SECONDS),
-                "-X", "POST", f"{creds['endpoint']}/api/capture",
+                "-X", "POST", f"{creds['api_base']}/functions/v1/capture",
                 "--config", "-",
                 "--data-binary", f"@{path}",
             ],
@@ -313,7 +321,7 @@ def sweep_stale_files(max_age_seconds: int = 3600) -> None:
 def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = False) -> None:
     """One session's delta, start to finish. Silent on every failure - it is a hook."""
     creds = credentials()
-    if not creds["capture_token"] or not creds["hook_secret"] or not creds["endpoint"]:
+    if not creds["capture_token"] or not creds["hook_secret"] or not creds["api_base"]:
         return
     if not os.path.isfile(transcript):
         return
@@ -616,6 +624,7 @@ def connect() -> int:
         print(f"Open this link to finish connecting:\n  {url}")
 
     thread.join(timeout=185)
+    api_base = (received.get("api") or "").rstrip("/")
     if received.get("state") != state or not received.get("code"):
         print("Sign-in did not complete. Nothing was changed.")
         return 1
@@ -627,11 +636,14 @@ def connect() -> int:
     if previous:
         request["connection_id"] = previous
     exchange = json.dumps(request)
+    if not api_base:
+        print("Kollate did not say where to deliver to. Update Kollate and try again.")
+        return 1
     try:
         result = subprocess.run(
             [
                 "curl", "-s", "--max-time", "20",
-                "-X", "POST", f"{endpoint}/api/connect/exchange",
+                "-X", "POST", f"{api_base}/functions/v1/connect-exchange",
                 "-H", "Content-Type: application/json",
                 "--data-binary", "@-",
             ],
@@ -658,6 +670,7 @@ def connect() -> int:
             "hook_secret": issued["hook_secret"],
             "connection_id": issued.get("connection_id"),
             "endpoint": endpoint,
+            "api_base": api_base,
         },
     )
     enrolled_at()

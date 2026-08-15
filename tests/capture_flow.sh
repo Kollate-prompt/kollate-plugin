@@ -8,7 +8,7 @@
 #   bash plugin/tests/capture_flow.sh
 set -uo pipefail
 
-BASE="${BASE:-http://localhost:8080}"
+BASE="${BASE:-http://127.0.0.1:54321}"   # Supabase, where the edge functions live
 DB="${DB:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}"
 TOKEN="${TOKEN:-test-capture-token-abc123}"
 SECRET="${SECRET:-test-hook-secret}"
@@ -26,7 +26,7 @@ check() { if [ "$2" = "$3" ]; then printf '  ok   %-46s %s\n' "$1" "$3"; pass=$(
 mkdir -p "$CLAUDE_PLUGIN_DATA"
 chmod 700 "$CLAUDE_PLUGIN_DATA"
 cat > "$CLAUDE_PLUGIN_DATA/credentials.json" <<JSON
-{"capture_token":"$TOKEN","hook_secret":"$SECRET","endpoint":"$BASE"}
+{"capture_token":"$TOKEN","hook_secret":"$SECRET","endpoint":"$BASE","api_base":"$BASE"}
 JSON
 chmod 600 "$CLAUDE_PLUGIN_DATA/credentials.json"
 # Enrolment is stamped at connect time, before any conversation exists. Reproduce that
@@ -103,7 +103,7 @@ check "one conversation throughout" 1 "$conversations"
 python3 -c "
 import json
 p='$CLAUDE_PLUGIN_DATA/credentials.json'
-d=json.load(open(p)); d['endpoint']='http://127.0.0.1:9'; json.dump(d, open(p,'w'))"
+d=json.load(open(p)); d['api_base']='http://127.0.0.1:9'; json.dump(d, open(p,'w'))"
 turn user "sent while the server was down" u5 >> "$TRANSCRIPT"
 fire
 missing=$(psql "$DB" -At -c "select count(*) from public.messages m
@@ -114,7 +114,7 @@ check "nothing stored while down"   0 "$missing"
 python3 -c "
 import json
 p='$CLAUDE_PLUGIN_DATA/credentials.json'
-d=json.load(open(p)); d['endpoint']='$BASE'; json.dump(d, open(p,'w'))"
+d=json.load(open(p)); d['api_base']='$BASE'; json.dump(d, open(p,'w'))"
 fire
 recovered=$(psql "$DB" -At -c "select count(*) from public.messages m
   join public.conversations c on c.id = m.conversation_id
@@ -205,7 +205,7 @@ psql "$DB" -q -c "delete from public.conversations where session_id in ('$OLD_SE
 PASTED=$(python3 -c "
 import base64, json
 print('kollate_' + base64.urlsafe_b64encode(json.dumps(
-  {'t':'$TOKEN','s':'$SECRET','c':'dddddddd-dddd-dddd-dddd-dddddddddddd'}).encode()).decode().rstrip('='))")
+  {'t':'$TOKEN','s':'$SECRET','c':'dddddddd-dddd-dddd-dddd-dddddddddddd','a':'$BASE'}).encode()).decode().rstrip('='))")
 FALLBACK_DATA="$WORK/nobrowser"
 mkdir -p "$FALLBACK_DATA"
 SESSION2="plugin-nobrowser-$$"
