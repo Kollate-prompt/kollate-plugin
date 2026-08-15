@@ -98,6 +98,30 @@ check "nothing new, nothing sent"   4 "$count"
 conversations=$(psql "$DB" -At -c "select count(*) from public.conversations where session_id = '$SESSION'")
 check "one conversation throughout" 1 "$conversations"
 
+# Naming. Claude Code writes its own `ai-title` into the transcript; capture carries it so a
+# list of conversations is readable instead of a wall of "Untitled".
+title_of() { psql "$DB" -At -c "select coalesce(title,'') from public.conversations where session_id = '$SESSION'"; }
+
+echo '{"type":"ai-title","aiTitle":"Naming the conversation","sessionId":"'"$SESSION"'"}' >> "$TRANSCRIPT"
+turn user "third question" t1 >> "$TRANSCRIPT"
+fire
+check "conversation takes its name"  "Naming the conversation" "$(title_of)"
+
+# The name follows the session as its subject changes - until somebody chooses one.
+echo '{"type":"ai-title","aiTitle":"A better name","sessionId":"'"$SESSION"'"}' >> "$TRANSCRIPT"
+turn user "fourth question" t2 >> "$TRANSCRIPT"
+fire
+check "capture may improve the name" "A better name" "$(title_of)"
+
+# A name a person chose must never be overwritten by the next turn - that is the whole point
+# of being able to rename, and the easiest thing to get wrong.
+psql "$DB" -q -c "update public.conversations set title = 'Chosen by hand', renamed_at = now()
+                  where session_id = '$SESSION'"
+echo '{"type":"ai-title","aiTitle":"Capture tries again","sessionId":"'"$SESSION"'"}' >> "$TRANSCRIPT"
+turn user "fifth question" t3 >> "$TRANSCRIPT"
+fire
+check "a chosen name is never overwritten" "Chosen by hand" "$(title_of)"
+
 # --- the endpoint is down -------------------------------------------------------------
 # The watermark must not move, so the next successful turn re-delivers what was missed.
 python3 -c "
@@ -123,7 +147,8 @@ check "recovered on the next turn"  1 "$recovered"
 
 total=$(psql "$DB" -At -c "select count(*) from public.messages m
   join public.conversations c on c.id = m.conversation_id where c.session_id = '$SESSION'")
-check "no duplicates after recovery" 5 "$total"
+# 4 from the opening exchanges, 3 more from the naming checks, 1 recovered here.
+check "no duplicates after recovery" 8 "$total"
 
 # --- the session is never slowed -------------------------------------------------------
 # Work order §02.4: measured across every round, not sampled once at exit. Timed around the

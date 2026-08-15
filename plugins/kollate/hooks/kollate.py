@@ -170,21 +170,27 @@ def _flatten(content) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def turns_from(path: str, start_offset: int) -> tuple[list[dict], int]:
-    """Read the transcript from `start_offset` and return whole turns plus the new offset.
+def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | None]:
+    """Read the transcript from `start_offset`: whole turns, the new offset, and a name.
 
     The offset only ever advances to the end of the last COMPLETE line: Claude Code may be
     mid-write, and half a JSON object is not a turn. That torn tail is simply read again next
     time, which is the cheapest correct thing to do.
+
+    The name is Claude Code's own `ai-title`, which it rewrites as a session finds its subject,
+    so we take the last one in the range and let a later delivery correct it. Reading only the
+    delta is deliberate: a transcript can be hundreds of megabytes and re-scanning it every
+    turn to find a title we already sent would cost far more than the title is worth.
     """
     turns: list[dict] = []
+    title: str | None = None
     consumed = start_offset
     try:
         with open(path, "rb") as handle:
             handle.seek(start_offset)
             data = handle.read()
     except OSError:
-        return [], start_offset
+        return [], start_offset, None
 
     for raw in data.splitlines(keepends=True):
         if not raw.endswith(b"\n"):
@@ -201,6 +207,12 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int]:
         except Exception:
             # A complete but unparseable line. Skip it and keep going: refusing to advance
             # would stall this session's capture permanently, and silently, on one bad line.
+            continue
+
+        if record.get("type") == "ai-title":
+            named = str(record.get("aiTitle") or "").strip()
+            if named:
+                title = named[:200]
             continue
 
         if record.get("type") not in ("user", "assistant"):
@@ -221,7 +233,18 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int]:
             }
         )
 
-    return turns, consumed
+    # Older transcripts predate `ai-title` entirely. Rather than leave those permanently
+    # "Untitled", name them from the opening question - which is what a person would have
+    # called it anyway. Only from the top of a file: mid-conversation there is no opening.
+    if title is None and start_offset == 0:
+        for turn in turns:
+            if turn["role"] == "user":
+                first_line = turn["content"].strip().splitlines()[0].strip()
+                if first_line:
+                    title = first_line[:120]
+                break
+
+    return turns, consumed, title
 
 
 def batches(turns: list[dict], first_seq: int):
@@ -380,16 +403,19 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     sweep_stale_files()
 
     mark = read_json(watermark_path(), {}).get(session_id) or {"offset": 0, "next_seq": 0}
-    turns, _end = turns_from(transcript, int(mark.get("offset", 0)))
+    turns, _end, title = turns_from(transcript, int(mark.get("offset", 0)))
     if not turns:
         return
 
     seq = int(mark.get("next_seq", 0))
     for batch, batch_end in batches(turns, seq):
-        if not deliver(session_id, batch, creds):
+        # The name rides along with the first batch only. Sending it with every batch would
+        # be the same value written repeatedly for no gain.
+        if not deliver(session_id, batch, creds, title):
             # Leave the watermark where the last confirmed batch left it. The next turn
             # re-sends from there, and the server dedups. Nothing is lost, nothing doubles.
             return
+        title = None  # sent, and only once - a later batch would just rewrite the same name
         seq = batch[-1]["seq"] + 1
         # Only as far as THIS batch reached. Advancing to the end of the whole delta here
         # would skip the turns in a batch that has not been sent yet.
