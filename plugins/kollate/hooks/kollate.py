@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import json
 import os
 import subprocess
@@ -589,6 +590,97 @@ def main() -> int:
 # ---------------------------------------------------------------------------- the connect
 
 
+# The last thing a person sees when connecting a machine, so it is worth not looking like a
+# stack trace. Colours are the app's own tokens (styles.css `:root` - dark ink, acid lime),
+# written literally because this page must render with no network: it is served by a loopback
+# socket on a laptop that may well be offline.
+_DONE_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__ - Kollate</title>
+<style>
+  :root {
+    --bg: #14181f; --bg: oklch(0.16 0.015 260);
+    --card: #1b2029; --card: oklch(0.20 0.018 260);
+    --fg: #f5f6f8; --fg: oklch(0.97 0.005 260);
+    --muted: #a3a9b5; --muted: oklch(0.70 0.02 260);
+    --border: #363b45; --border: oklch(0.28 0.015 260);
+    --lime: #c3f53c; --lime: oklch(0.90 0.22 130);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 1.5rem;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 26rem; padding: 2rem;
+    background: var(--card); border: 1px solid var(--border); border-radius: 0.625rem;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 1.0625rem; font-weight: 600; letter-spacing: -0.01em;
+  }
+  .mark { width: 0.75rem; height: 0.75rem; border-radius: 0.1875rem; background: var(--lime); }
+  h1 { margin: 1.75rem 0 0; font-size: 1.375rem; font-weight: 600; letter-spacing: -0.015em; }
+  p { margin: 0.5rem 0 0; color: var(--muted); }
+  ul { margin: 1.25rem 0 0; padding: 0; list-style: none; }
+  li { position: relative; padding-inline-start: 1.25rem; margin-top: 0.5rem; color: var(--muted); }
+  li::before {
+    content: ""; position: absolute; inset-inline-start: 0; top: 0.6875rem;
+    width: 0.375rem; height: 0.375rem; border-radius: 999px; background: var(--lime);
+  }
+  a.go {
+    display: inline-block; margin-top: 1.75rem; padding: 0.5rem 1rem;
+    background: var(--lime); color: var(--bg); text-decoration: none;
+    font-weight: 500; border-radius: 0.5rem;
+  }
+  .close { margin-top: 1rem; font-size: 0.8125rem; }
+</style></head>
+<body><main class="card">
+  <div class="brand"><span class="mark"></span>Kollate</div>
+  <h1>__HEADING__</h1>
+  <p>__BODY__</p>
+  __EXTRA__
+</main></body></html>
+"""
+
+_CONNECTED_EXTRA = """<ul>
+    <li>New conversations on this machine are saved to your workspace as they happen.</li>
+    <li>Anything from before now is left alone - connecting does not reach backwards.</li>
+    <li>Your workspace admins can read what is captured.</li>
+    <li>Disconnect this machine any time from Connect in Kollate.</li>
+  </ul>
+  __BUTTON__
+  <p class="close">You can close this tab - Claude Code is finishing up.</p>"""
+
+_FAILED_EXTRA = """<p class="close">Close this tab and run /kollate:connect again.</p>"""
+
+
+def done_page(ok: bool, endpoint: str = "") -> str:
+    """The loopback listener's only response. `ok` is false when nothing usable came back."""
+    if ok:
+        title, heading = "Connected", "This machine is connected."
+        body = "Go back to your workspace - from here on, your Claude Code conversations are preserved in Kollate."
+        button = ""
+        # Only offer the link if the address is one we would trust anywhere else.
+        if safe_api_base(endpoint):
+            target = html.escape(endpoint.rstrip("/") + "/app/conversations", quote=True)
+            button = f'<a class="go" href="{target}">Open your workspace</a>'
+        extra = _CONNECTED_EXTRA.replace("__BUTTON__", button)
+    else:
+        title, heading = "Not connected", "That did not complete."
+        body = "Nothing was changed, and this machine is not connected."
+        extra = _FAILED_EXTRA
+
+    return (
+        _DONE_PAGE.replace("__TITLE__", title)
+        .replace("__HEADING__", heading)
+        .replace("__BODY__", body)
+        .replace("__EXTRA__", extra)
+    )
+
+
 def connect() -> int:
     """Loopback sign-in. The person sees their normal Kollate login and nothing else."""
     import http.server
@@ -627,24 +719,105 @@ def connect() -> int:
     state = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
     received: dict[str, str] = {}
 
+    label = f"{os.uname().nodename}"
+    # Filled in by the handler thread, read by this one once it is done.
+    outcome: dict[str, object] = {}
+
+    def finish(received: dict[str, str]) -> tuple[bool, str]:
+        """Redeem the code and store the credential. Runs before the browser is answered."""
+        if received.get("state") != state or not received.get("code"):
+            return False, "Sign-in did not complete. Nothing was changed."
+
+        api_base = safe_api_base(received.get("api") or "")
+        if not api_base:
+            return False, "Kollate did not say where to deliver to. Update Kollate and try again."
+
+        # If this machine has connected before, name that connection so it is rotated rather
+        # than duplicated - one laptop should be one row on the person's Connect page.
+        request = {"code": received["code"], "redirect_uri": redirect_uri, "label": label}
+        previous = read_json(credentials_path(), {}).get("connection_id")
+        if previous:
+            request["connection_id"] = previous
+
+        try:
+            result = subprocess.run(
+                [
+                    "curl", "-s", "--max-time", "20",
+                    "-X", "POST", f"{api_base}/functions/v1/connect-exchange",
+                    "-H", "Content-Type: application/json",
+                    "--data-binary", "@-",
+                ],
+                input=json.dumps(request),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            issued = json.loads(result.stdout or "{}")
+        except Exception:
+            issued = {}
+
+        if not issued.get("capture_token") or not issued.get("hook_secret"):
+            return False, "Could not complete the connection. Nothing was changed."
+
+        # Replace any previous credential in place, so connecting twice does not leave two
+        # machines behind. Owner-only, and it lives in CLAUDE_PLUGIN_DATA so a plugin update
+        # does not take it with it.
+        write_json_private(
+            credentials_path(),
+            {
+                "capture_token": issued["capture_token"],
+                "hook_secret": issued["hook_secret"],
+                "connection_id": issued.get("connection_id"),
+                "endpoint": endpoint,
+                "api_base": api_base,
+            },
+        )
+        enrolled_at()
+        return True, "Connected. New Claude Code conversations on this machine will be saved to Kollate."
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib naming
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            received.update({k: v[0] for k, v in query.items()})
+            parsed = urllib.parse.urlparse(self.path)
+            # Browsers ask for /favicon.ico on any new origin, unbidden. Answering that as
+            # though it were the callback would consume our one request and lose the real
+            # one, so anything but the callback is turned away and we keep listening.
+            if parsed.path != "/callback":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            received = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+            # Redeem BEFORE answering. The page is the only thing most people read, so it
+            # must not say "connected" while the exchange is still ahead of it and able to
+            # fail - the terminal they were told to walk away from would be the only place
+            # that ever said otherwise.
+            try:
+                ok, message = finish(received)
+            except Exception:
+                ok, message = False, "Could not complete the connection. Nothing was changed."
+            outcome["ok"], outcome["message"] = ok, message
+
+            body = done_page(ok, endpoint).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(b"<h2>Connected. You can close this tab.</h2>")
+            self.wfile.write(body)
 
         def log_message(self, *args):  # keep the terminal clean
             pass
 
     server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-    server.timeout = 180
-    thread = threading.Thread(target=server.handle_request, daemon=True)
+    server.timeout = 30
+
+    def serve_until_answered() -> None:
+        deadline = time.time() + 180
+        while "ok" not in outcome and time.time() < deadline:
+            server.handle_request()  # returns on timeout too, which re-checks the deadline
+
+    thread = threading.Thread(target=serve_until_answered, daemon=True)
     thread.start()
 
-    label = f"{os.uname().nodename}"
     url = (
         f"{endpoint}/connect-machine?redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
         f"&state={state}&label={urllib.parse.quote(label, safe='')}"
@@ -654,58 +827,8 @@ def connect() -> int:
         print(f"Open this link to finish connecting:\n  {url}")
 
     thread.join(timeout=185)
-    api_base = safe_api_base(received.get("api") or "")
-    if received.get("state") != state or not received.get("code"):
-        print("Sign-in did not complete. Nothing was changed.")
-        return 1
-
-    # If this machine has connected before, name that connection so it is rotated rather
-    # than duplicated - one laptop should be one row on the person's Connect page.
-    request = {"code": received["code"], "redirect_uri": redirect_uri, "label": label}
-    previous = read_json(credentials_path(), {}).get("connection_id")
-    if previous:
-        request["connection_id"] = previous
-    exchange = json.dumps(request)
-    if not api_base:
-        print("Kollate did not say where to deliver to. Update Kollate and try again.")
-        return 1
-    try:
-        result = subprocess.run(
-            [
-                "curl", "-s", "--max-time", "20",
-                "-X", "POST", f"{api_base}/functions/v1/connect-exchange",
-                "-H", "Content-Type: application/json",
-                "--data-binary", "@-",
-            ],
-            input=exchange,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        issued = json.loads(result.stdout or "{}")
-    except Exception:
-        issued = {}
-
-    if not issued.get("capture_token") or not issued.get("hook_secret"):
-        print("Could not complete the connection. Nothing was changed.")
-        return 1
-
-    # Replace any previous credential in place, so connecting twice does not leave two
-    # machines behind. Owner-only, and it lives in CLAUDE_PLUGIN_DATA so a plugin update
-    # does not take it with it.
-    write_json_private(
-        credentials_path(),
-        {
-            "capture_token": issued["capture_token"],
-            "hook_secret": issued["hook_secret"],
-            "connection_id": issued.get("connection_id"),
-            "endpoint": endpoint,
-            "api_base": api_base,
-        },
-    )
-    enrolled_at()
-    print("Connected. New Claude Code conversations on this machine will be saved to Kollate.")
-    return 0
+    print(outcome.get("message") or "Sign-in did not complete. Nothing was changed.")
+    return 0 if outcome.get("ok") else 1
 
 
 if __name__ == "__main__":
