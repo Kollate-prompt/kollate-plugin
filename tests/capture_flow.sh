@@ -306,6 +306,19 @@ recovered_crash=$(psql "$DB" -At -c "select count(*) from public.messages m
   where c.session_id = '$CRASH_SESSION' and m.content = 'survived the crash'")
 check "crash recovered at session start" 1 "$recovered_crash"
 
+# A subagent transcript is machinery inside a session, not a conversation somebody had. The scan
+# walks the whole tree, so without an exclusion it mints a phantom conversation per subagent -
+# titled with the agent's own prompt, and drawn from every project on the machine.
+SUB_SESSION="agent-plugin-sub-$$"
+mkdir -p "$CRASH_HOME/.claude/projects/proj/subagents"
+turn user "subagent chatter" s1 > "$CRASH_HOME/.claude/projects/proj/subagents/$SUB_SESSION.jsonl"
+env HOME="$CRASH_HOME" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" \
+    python3 -S -E "$HOOKS/kollate.py" reconcile <<< '{"session_id":"some-other-live-session"}'
+sleep 3
+leaked_subagent=$(psql "$DB" -At -c "select count(*) from public.conversations
+  where session_id = '$SUB_SESSION'")
+check "subagent transcripts are not conversations" 0 "$leaked_subagent"
+
 # Backfill must never be something a hook does. Nothing in hooks.json may invoke it.
 hooked=$(grep -c "backfill" "$HOOKS/hooks.json" || true)
 check "backfill is not wired to any hook" 0 "$hooked"

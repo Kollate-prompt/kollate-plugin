@@ -481,7 +481,11 @@ def reconcile(live_session_id: str) -> None:
     marks = read_json(watermark_path(), {})
     cutoff = enrolled_at()
     root = os.path.expanduser("~/.claude/projects")
-    for directory, _subdirs, files in os.walk(root):
+    for directory, subdirs, files in os.walk(root):
+        # A subagent transcript is machinery inside somebody's session, not a conversation they
+        # had - capturing it mints a phantom conversation whose first line is an agent prompt.
+        # Nothing hooks SubagentStop either, so this scan was the only way they ever got in.
+        subdirs[:] = [d for d in subdirs if d != "subagents"]
         for name in files:
             if not name.endswith(".jsonl"):
                 continue
