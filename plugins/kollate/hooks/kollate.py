@@ -183,6 +183,75 @@ def credentials() -> dict:
     }
 
 
+def pause_path() -> str:
+    # Shared, deliberately: pausing from the terminal must also pause the desktop app.
+    return os.path.join(shared_dir(), "pause.json")
+
+
+def capture_blocked(session_id: str) -> str:
+    """Why capture is off right now, or "" when it is on.
+
+    Paused turns are DROPPED, not held: "don't capture this" means the content must never
+    arrive, and a queue that flushes on resume would deliver exactly what the person asked
+    to keep out.
+    """
+    state = read_json(pause_path(), {})
+    if session_id and session_id in (state.get("sessions") or []):
+        return "this session is paused"
+    if "until" in state:
+        if state["until"] is None:
+            return "capture is stopped"
+        try:
+            if time.time() < float(state["until"]):
+                return "capture is paused"
+        except (TypeError, ValueError):
+            pass
+    return ""
+
+
+def cmd_pause(scope: str) -> int:
+    state = read_json(pause_path(), {})
+    now = time.time()
+    if scope in ("session", "this session", "this"):
+        sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        if not sid:
+            print("Could not tell which session this is. Use a duration instead: /kollate:pause 3h")
+            return 1
+        sessions = set(state.get("sessions") or [])
+        sessions.add(sid)
+        state["sessions"] = sorted(sessions)
+        message = "Paused: this session will not be captured. Everything else still is."
+    elif scope in ("3h", "3 hours", "3hours"):
+        state["until"] = now + 3 * 3600
+        message = "Capture paused for 3 hours. Nothing on this machine is captured until then."
+    elif scope == "today":
+        local = time.localtime(now)
+        midnight = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 23, 59, 59, 0, 0, -1))
+        state["until"] = midnight
+        message = "Capture paused for the rest of today."
+    elif scope in ("week", "1w", "7d"):
+        state["until"] = now + 7 * 86400
+        message = "Capture paused for a week."
+    elif scope in ("stop", "forever", "off"):
+        state["until"] = None
+        message = "Capture stopped on this machine. /kollate:resume turns it back on."
+    else:
+        print("Pause what? One of: session · 3h · today · week   (or /kollate:stop)")
+        return 1
+    write_json_private(pause_path(), state)
+    print(message + " Paused turns are dropped, not queued - they will not arrive later.")
+    return 0
+
+
+def cmd_resume() -> int:
+    try:
+        os.remove(pause_path())
+    except OSError:
+        pass
+    print("Capture resumed. New turns from now on are captured; nothing from the pause is.")
+    return 0
+
+
 def enrolled_at() -> float:
     """The moment this machine was connected. Older transcripts are never captured (§2.4)."""
     path = os.path.join(plugin_dir(), "enrolled_at")
@@ -465,6 +534,12 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     if not turns:
         return
 
+    blocked = capture_blocked(session_id)
+    if blocked:
+        # Advance the watermark over the delta without sending it, so it is gone for good.
+        advance_watermark(session_id, _end, int(mark.get("next_seq", 0)))
+        return
+
     seq = int(mark.get("next_seq", 0))
     for batch, batch_end in batches(turns, seq):
         # The name rides along with the first batch only. Sending it with every batch would
@@ -643,6 +718,20 @@ def main() -> int:
     if command == "reconcile":
         event = read_event()
         live = event.get("session_id") or event.get("sessionId") or ""
+        # Say out loud that capture is on, once per session - not on compaction, which would
+        # repeat it mid-conversation. People should not have to discover monitoring.
+        if event.get("source") != "compact":
+            creds = credentials()
+            if creds["capture_token"] and creds["endpoint"]:
+                blocked = capture_blocked(live)
+                if blocked:
+                    text = (f"Kollate: {blocked} - this conversation is NOT being captured. "
+                            "/kollate:resume turns capture back on.")
+                else:
+                    text = (f"This conversation is captured to Kollate - {creds['endpoint']}/app/conversations . "
+                            "Keep this session out: /kollate:pause session · pause everything: "
+                            "/kollate:pause 3h|today|week · /kollate:stop")
+                print(json.dumps({"systemMessage": text, "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
 
@@ -668,6 +757,12 @@ def main() -> int:
                 except ValueError:
                     pass
         return backfill(limit)
+
+    if command == "pause":
+        return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
+
+    if command == "resume":
+        return cmd_resume()
 
     if command == "connect":
         return connect()
