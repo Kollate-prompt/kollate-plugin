@@ -213,7 +213,7 @@ def _flatten(content) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | None]:
+def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | None, bool]:
     """Read the transcript from `start_offset`: whole turns, the new offset, and a name.
 
     The offset only ever advances to the end of the last COMPLETE line: Claude Code may be
@@ -227,13 +227,14 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
     """
     turns: list[dict] = []
     title: str | None = None
+    title_chosen = False
     consumed = start_offset
     try:
         with open(path, "rb") as handle:
             handle.seek(start_offset)
             data = handle.read()
     except OSError:
-        return [], start_offset, None
+        return [], start_offset, None, False
 
     for raw in data.splitlines(keepends=True):
         if not raw.endswith(b"\n"):
@@ -252,9 +253,18 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
             # would stall this session's capture permanently, and silently, on one bad line.
             continue
 
+        # `/rename` writes `custom-title`; Claude's own naming writes `ai-title`. They are not
+        # interchangeable - one is a person's decision and must not be undone by the other on
+        # the next turn - so which kind it was travels with the name.
+        if record.get("type") == "custom-title":
+            named = str(record.get("customTitle") or "").strip()
+            if named:
+                title, title_chosen = named[:200], True
+            continue
+
         if record.get("type") == "ai-title":
             named = str(record.get("aiTitle") or "").strip()
-            if named:
+            if named and not title_chosen:
                 title = named[:200]
             continue
 
@@ -287,7 +297,7 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
                     title = first_line[:120]
                 break
 
-    return turns, consumed, title
+    return turns, consumed, title, title_chosen
 
 
 def batches(turns: list[dict], first_seq: int):
@@ -318,11 +328,16 @@ def batches(turns: list[dict], first_seq: int):
 # ------------------------------------------------------------------------------- delivery
 
 
-def deliver(session_id: str, messages: list[dict], creds: dict, title: str | None = None) -> bool:
+def deliver(session_id: str, messages: list[dict], creds: dict, title: str | None = None,
+            title_chosen: bool = False) -> bool:
     """POST one delta. True only on a confirmed 2xx - that is what moves the watermark."""
     payload = {"session_id": session_id, "messages": messages}
     if title:
         payload["title"] = title
+        # A name somebody typed with /rename must not be undone by the automatic one on the
+        # next turn, so the server is told which kind this is.
+        if title_chosen:
+            payload["title_chosen"] = True
     body = json.dumps(payload, ensure_ascii=False)
     timestamp = str(int(time.time()))
     signature = hmac.new(
@@ -446,7 +461,7 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     sweep_stale_files()
 
     mark = read_json(watermark_path(), {}).get(session_id) or {"offset": 0, "next_seq": 0}
-    turns, _end, title = turns_from(transcript, int(mark.get("offset", 0)))
+    turns, _end, title, title_chosen = turns_from(transcript, int(mark.get("offset", 0)))
     if not turns:
         return
 
@@ -454,11 +469,11 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     for batch, batch_end in batches(turns, seq):
         # The name rides along with the first batch only. Sending it with every batch would
         # be the same value written repeatedly for no gain.
-        if not deliver(session_id, batch, creds, title):
+        if not deliver(session_id, batch, creds, title, title_chosen):
             # Leave the watermark where the last confirmed batch left it. The next turn
             # re-sends from there, and the server dedups. Nothing is lost, nothing doubles.
             return
-        title = None  # sent, and only once - a later batch would just rewrite the same name
+        title, title_chosen = None, False  # sent once; a later batch would rewrite the same name
         seq = batch[-1]["seq"] + 1
         # Only as far as THIS batch reached. Advancing to the end of the whole delta here
         # would skip the turns in a batch that has not been sent yet.
