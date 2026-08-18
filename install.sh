@@ -47,11 +47,33 @@ options = (settings.setdefault("pluginConfigs", {})
 options["endpoint"] = os.environ["KOLLATE_URL"].rstrip("/")
 settings.setdefault("enabledPlugins", {})["kollate@kollate"] = True
 
-os.makedirs(os.path.dirname(path), exist_ok=True)
+os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+
+# Keep whatever permissions the file already had; create a new one owner-only. This file can
+# carry hook commands and permission rules, so it must not become group- or world-writable.
+try:
+    mode = os.stat(path).st_mode & 0o777
+except OSError:
+    mode = 0o600
+
 tmp = path + ".tmp"
-with open(tmp, "w") as handle:
-    json.dump(settings, handle, indent=2)
+handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(handle, "w") as out:
+    json.dump(settings, out, indent=2)
+os.chmod(tmp, mode)
 os.replace(tmp, path)
+
+# The desktop app loads the plugin but has no userConfig screen - its plugin page offers only
+# Skills and Hooks - so the setting above is invisible there. The same address goes to a file
+# both surfaces read, which is what lets one install cover the terminal and the app.
+shared = os.path.expanduser("~/.kollate")
+os.makedirs(shared, mode=0o700, exist_ok=True)
+config = os.path.join(shared, "config.json")
+tmp = config + ".tmp"
+handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(handle, "w") as out:
+    json.dump({"endpoint": os.environ["KOLLATE_URL"].rstrip("/")}, out)
+os.replace(tmp, config)
 PY
 
 cat <<DONE

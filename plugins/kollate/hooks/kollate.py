@@ -43,6 +43,35 @@ def plugin_dir() -> str:
     return os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.kollate")
 
 
+def shared_dir() -> str:
+    """One place both surfaces can see.
+
+    Claude Code in a terminal sets CLAUDE_PLUGIN_DATA; the desktop app may not, and it has no
+    userConfig screen at all - its plugin page shows only Skills and Hooks. So the address and
+    the credential are also kept here, where either surface finds them, and connecting once is
+    enough for both.
+    """
+    return os.path.expanduser("~/.kollate")
+
+
+def configured_endpoint() -> str:
+    """Where this organisation's Kollate lives, from whichever surface could tell us.
+
+    userConfig is the documented route and works in the terminal. It is simply absent on the
+    desktop app, so a file the installer writes has to serve there - otherwise the plugin can
+    never learn its own address and connect fails with nothing the person can do about it.
+    """
+    from_env = (os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or "").strip()
+    if from_env:
+        return from_env.rstrip("/")
+    for directory in (plugin_dir(), shared_dir()):
+        stored = read_json(os.path.join(directory, "config.json"), {})
+        value = str(stored.get("endpoint") or "").strip()
+        if value:
+            return value.rstrip("/")
+    return ""
+
+
 def watermark_path() -> str:
     return os.path.join(plugin_dir(), "delivered.json")
 
@@ -67,6 +96,17 @@ def write_json_private(path: str, value) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(value, handle)
     os.replace(tmp, path)
+
+
+def printable(value: str, limit: int = 200) -> str:
+    """Text from outside, made safe to print.
+
+    Escape sequences in a terminal can move the cursor, recolour, or overwrite what is already
+    on screen - so a message that arrives on a URL must not be echoed verbatim, however
+    trustworthy the sender looks.
+    """
+    cleaned = "".join(character for character in value if character.isprintable())
+    return cleaned.strip()[:limit]
 
 
 def safe_api_base(value: str) -> str:
@@ -126,10 +166,13 @@ def unpack_machine_key(value: str) -> dict:
 def credentials() -> dict:
     """Stored credential from /kollate:connect, else the no-browser setup key."""
     stored = read_json(credentials_path(), {})
+    if not stored.get("capture_token"):
+        # Connected from the other surface on this same machine.
+        stored = read_json(os.path.join(shared_dir(), "credentials.json"), {})
     pasted = unpack_machine_key(os.environ.get("CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN", "").strip())
     token = stored.get("capture_token") or pasted.get("capture_token", "")
     secret = stored.get("hook_secret") or pasted.get("hook_secret", "")
-    endpoint = stored.get("endpoint") or os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or ""
+    endpoint = stored.get("endpoint") or configured_endpoint()
     api = safe_api_base(stored.get("api_base") or "") or pasted.get("api_base") or ""
     return {
         "capture_token": token,
@@ -718,7 +761,7 @@ def connect() -> int:
     import threading
     import webbrowser
 
-    endpoint = (os.environ.get("CLAUDE_PLUGIN_OPTION_ENDPOINT") or "").rstrip("/")
+    endpoint = configured_endpoint()
     if not endpoint:
         print(
             "Set your Kollate address first: run /plugin, configure the kollate plugin, and\n"
@@ -758,9 +801,9 @@ def connect() -> int:
         # Kollate refuses some connects for reasons only it knows - no workspace yet, most
         # commonly. It says so on the redirect, so pass that on rather than making the person
         # watch a silent terminal for three minutes and guess.
-        refused = (received.get("error") or "").strip()
+        refused = printable(received.get("error") or "")
         if refused and received.get("state") == state:
-            return False, refused[:200] + " Nothing was changed."
+            return False, refused + " Nothing was changed."
 
         if received.get("state") != state or not received.get("code"):
             return False, "Sign-in did not complete. Nothing was changed."
@@ -772,7 +815,8 @@ def connect() -> int:
         # If this machine has connected before, name that connection so it is rotated rather
         # than duplicated - one laptop should be one row on the person's Connect page.
         request = {"code": received["code"], "redirect_uri": redirect_uri, "label": label}
-        previous = read_json(credentials_path(), {}).get("connection_id")
+        previous = (read_json(credentials_path(), {}).get("connection_id")
+                    or read_json(os.path.join(shared_dir(), "credentials.json"), {}).get("connection_id"))
         if previous:
             request["connection_id"] = previous
 
@@ -799,16 +843,19 @@ def connect() -> int:
         # Replace any previous credential in place, so connecting twice does not leave two
         # machines behind. Owner-only, and it lives in CLAUDE_PLUGIN_DATA so a plugin update
         # does not take it with it.
-        write_json_private(
-            credentials_path(),
-            {
-                "capture_token": issued["capture_token"],
-                "hook_secret": issued["hook_secret"],
-                "connection_id": issued.get("connection_id"),
-                "endpoint": endpoint,
-                "api_base": api_base,
-            },
-        )
+        #
+        # Written to the shared location as well, because the terminal and the desktop app do
+        # not agree on CLAUDE_PLUGIN_DATA. Connecting from one should not leave the other
+        # silently uncaptured on the same machine, by the same person.
+        credential = {
+            "capture_token": issued["capture_token"],
+            "hook_secret": issued["hook_secret"],
+            "connection_id": issued.get("connection_id"),
+            "endpoint": endpoint,
+            "api_base": api_base,
+        }
+        for target in {credentials_path(), os.path.join(shared_dir(), "credentials.json")}:
+            write_json_private(target, credential)
         enrolled_at()
         return True, "Connected. New Claude Code conversations on this machine will be saved to Kollate."
 
