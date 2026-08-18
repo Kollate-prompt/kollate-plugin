@@ -38,11 +38,15 @@ Claude Code will mention that one userConfig option is still unset. That is the 
 only machines with no browser need — ignore it unless you are on one.
 </details>
 
-### The Claude desktop app is not supported yet
+### The Claude desktop app
 
-The desktop app keeps its plugins in its own registry, separate from the one `claude plugin
-install` writes to, and its cloud sessions run on Anthropic's infrastructure where nothing on
-your machine can observe them. Use Claude Code in a terminal.
+The same install works. Two things to know:
+
+- **Quit and reopen the app itself** after installing — not the window. Plugins load at startup,
+  and until you do, `/kollate:connect` will not appear when you type it.
+- **Cloud sessions are not captured.** If the session shows a cloud icon and asks you to pick a
+  repository, it is running on Anthropic's infrastructure rather than on your machine, and
+  nothing on your machine can see it. Local sessions capture normally.
 
 ## What gets captured
 
