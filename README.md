@@ -5,21 +5,15 @@ work your team does with Claude stops evaporating when a session ends.
 
 ## Install
 
-Two commands, with your organisation's Kollate address in the second one:
+One command. Put your own Kollate address at the end — it is the address you sign in at, and it
+is shown on the Connect page inside Kollate.
 
 ```bash
-claude plugin marketplace add Kollate-prompt/kollate-plugin
-claude plugin install kollate --config endpoint=https://your-kollate-address
+curl -fsSL https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/install.sh | bash -s -- https://your-kollate-address
 ```
 
-The plugin will not guess that address. An address that resolves to nothing looks exactly like
-capture working, and that is the one failure mode worth refusing to ship. (You can also set it
-later from `/plugin` — configure the kollate plugin and fill in **Kollate URL**.)
-
-Claude Code will mention that one userConfig option is still unset. That is the setup key, which
-only machines with no browser need; ignore it unless you are on one.
-
-**Restart Claude Code**, then run:
+Then **quit Claude Code completely and open it again** — plugins load at startup, so a session
+that is already running will not see this one. Finally, inside Claude Code:
 
 ```
 /kollate:connect
@@ -27,6 +21,28 @@ only machines with no browser need; ignore it unless you are on one.
 
 Your browser opens the Kollate sign-in you already use. Approve, and this machine is
 connected. **You are never shown a key, never paste one, and never edit a file.**
+
+<details>
+<summary>Doing it by hand instead</summary>
+
+```bash
+claude plugin marketplace add Kollate-prompt/kollate-plugin
+claude plugin install kollate
+```
+
+Then set **Kollate URL** from `/plugin` → configure `kollate`. (Newer builds accept
+`--config endpoint=https://your-kollate-address` on the install line; older ones reject it,
+which is why the script writes the setting directly.)
+
+Claude Code will mention that one userConfig option is still unset. That is the setup key, which
+only machines with no browser need — ignore it unless you are on one.
+</details>
+
+### The Claude desktop app is not supported yet
+
+The desktop app keeps its plugins in its own registry, separate from the one `claude plugin
+install` writes to, and its cloud sessions run on Anthropic's infrastructure where nothing on
+your machine can observe them. Use Claude Code in a terminal.
 
 ## What gets captured
 

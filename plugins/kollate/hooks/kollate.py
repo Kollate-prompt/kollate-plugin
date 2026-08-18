@@ -755,6 +755,13 @@ def connect() -> int:
 
     def finish(received: dict[str, str]) -> tuple[bool, str]:
         """Redeem the code and store the credential. Runs before the browser is answered."""
+        # Kollate refuses some connects for reasons only it knows - no workspace yet, most
+        # commonly. It says so on the redirect, so pass that on rather than making the person
+        # watch a silent terminal for three minutes and guess.
+        refused = (received.get("error") or "").strip()
+        if refused and received.get("state") == state:
+            return False, refused[:200] + " Nothing was changed."
+
         if received.get("state") != state or not received.get("code"):
             return False, "Sign-in did not complete. Nothing was changed."
 
