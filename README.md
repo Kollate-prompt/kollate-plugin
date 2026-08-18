@@ -5,17 +5,21 @@ work your team does with Claude stops evaporating when a session ends.
 
 ## Install
 
+Two commands, with your organisation's Kollate address in the second one:
+
 ```bash
 claude plugin marketplace add Kollate-prompt/kollate-plugin
-claude plugin install kollate
+claude plugin install kollate --config endpoint=https://your-kollate-address
 ```
 
-Then tell it where your Kollate lives — run `/plugin`, configure the kollate plugin, and set
-**Kollate URL** to your organisation's address. The plugin will not guess it: an address that
-resolves to nothing looks exactly like capture working, and that is the one failure mode worth
-refusing to ship.
+The plugin will not guess that address. An address that resolves to nothing looks exactly like
+capture working, and that is the one failure mode worth refusing to ship. (You can also set it
+later from `/plugin` — configure the kollate plugin and fill in **Kollate URL**.)
 
-Then, in Claude Code:
+Claude Code will mention that one userConfig option is still unset. That is the setup key, which
+only machines with no browser need; ignore it unless you are on one.
+
+**Restart Claude Code**, then run:
 
 ```
 /kollate:connect
