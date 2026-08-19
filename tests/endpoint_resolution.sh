@@ -28,7 +28,7 @@ checks = [
     ("file used when userConfig absent", resolve(with_file), "https://from-file.example"),
     ("userConfig wins when present",
      resolve(with_file, "https://from-userconfig.example"), "https://from-userconfig.example"),
-    ("empty when neither is set", resolve(tempfile.mkdtemp()), ""),
+    ("hosted default when nothing is set", resolve(tempfile.mkdtemp()), "https://app.kollate.ai"),
 ]
 failed = 0
 for name, got, want in checks:

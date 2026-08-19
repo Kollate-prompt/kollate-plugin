@@ -69,7 +69,11 @@ def configured_endpoint() -> str:
         value = str(stored.get("endpoint") or "").strip()
         if value:
             return value.rstrip("/")
-    return ""
+    # Nothing configured means a GUI install - the desktop app's marketplace dialog runs no
+    # installer and offers no settings screen, so with no default the person hits a dead end.
+    # The hosted address is the right guess for everyone not running their own Kollate; those
+    # who are set any of the values above and this line never speaks.
+    return "https://app.kollate.ai"
 
 
 def watermark_path() -> str:

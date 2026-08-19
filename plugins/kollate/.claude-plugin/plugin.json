@@ -1,6 +1,6 @@
 {
   "name": "kollate",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Capture your Claude Code conversations into your organisation's Kollate workspace",
   "author": {
     "name": "Kollate"
@@ -9,7 +9,7 @@
     "endpoint": {
       "type": "string",
       "title": "Kollate URL",
-      "description": "Your organisation's Kollate address, e.g. https://app.kollate.ai. Required - the plugin will not guess it."
+      "description": "Your organisation's Kollate address. Leave empty for the hosted https://app.kollate.ai; set it only if your organisation runs Kollate at its own address."
     },
     "capture_token": {
       "type": "string",
