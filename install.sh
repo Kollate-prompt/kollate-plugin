@@ -31,7 +31,7 @@ claude plugin install kollate >/dev/null 2>&1 || claude plugin install kollate@k
 
 # `install` is a no-op when the plugin is already present, and an old version is exactly why
 # someone re-runs this script - so always finish on the latest release.
-claude plugin update kollate >/dev/null 2>&1 || true
+claude plugin update kollate@kollate >/dev/null 2>&1 || claude plugin update kollate >/dev/null 2>&1 || true
 
 echo "→ Pointing it at $URL"
 KOLLATE_URL="$URL" python3 - <<'PY'
