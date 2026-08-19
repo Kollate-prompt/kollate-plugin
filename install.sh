@@ -23,10 +23,15 @@ command -v python3 >/dev/null || { echo "python3 is required (macOS and Linux sh
 command -v curl    >/dev/null || { echo "curl is required."               >&2; exit 1; }
 
 echo "→ Adding the Kollate marketplace"
-claude plugin marketplace add Kollate-prompt/kollate-plugin >/dev/null
+claude plugin marketplace add Kollate-prompt/kollate-plugin >/dev/null 2>&1 \
+  || claude plugin marketplace update kollate >/dev/null
 
 echo "→ Installing the plugin"
 claude plugin install kollate >/dev/null 2>&1 || claude plugin install kollate@kollate >/dev/null
+
+# `install` is a no-op when the plugin is already present, and an old version is exactly why
+# someone re-runs this script - so always finish on the latest release.
+claude plugin update kollate >/dev/null 2>&1 || true
 
 echo "→ Pointing it at $URL"
 KOLLATE_URL="$URL" python3 - <<'PY'
