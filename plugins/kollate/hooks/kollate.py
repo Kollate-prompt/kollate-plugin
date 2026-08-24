@@ -192,6 +192,21 @@ def pause_path() -> str:
     return os.path.join(shared_dir(), "pause.json")
 
 
+# The Kollate mark, pre-rendered from the product favicon into truecolor half-blocks -
+# the only image format a terminal TUI reliably shows. Regenerate from the favicon with
+# tools/icon_art.py when the brand changes.
+ICON_ART_PACKED = "eJzFV9mVwyAM/E8LaQIE+HiUkhrSw1axBW4lK2yDQeJQNt6Xl/gDMtYxGglyf5jFg1fh87w/bFho5bX1oJ8/31/3R9g2xXaE4XfyYChMbzBIMFy7sOYwl8Pa1gqY8Xr2YEcwodOPwIQpvEevrFhl3aPpA3MrXer/qajxM5onoGMzWrITPiu+R42Bx1/MGRjaRuMaFHUaOT+QIW8W2B5vCmwJOzzLKqpma+RPGjvlwjW4EBF7kcpuL7YAob8BI4yYLTSeAUobg9N67bLrXHzOuYbmFVLHR9tmM7CRQgTAdy3GOU/UMn7XvB0WjSvn0REHLgVQ4cpyoFbLERhw98xqJbEsfJpYeKYt5a4UnYB4WRFHknhVOkLY3nCFrmcOiz3dbXFa4LQmLmM5LSswpQ4UNpNVfkocZzsUaqTQXXibngopVhQmTElEj5Dqi+r7rlwah22UeORjnzz8cCTzeR87tHtn1r1Zj9JCBLewjZVx97ICp5EykiLoDUjPknyspKl4hj+eis3ECFnn2BkR7zjxF136etKp3W/jUdhXGDmOGzLMTun+cXye+nIp1ukgzZsuKiVqPe4rfVTpDxr0y2KXciEjVlakRsm5NMg1eb8PD1w2/h5Rl+qtBK45bD8KE6bwx4rK6bV1a/n9tqj7L6PO85g="
+
+
+def icon_art() -> str:
+    import base64 as _b64
+    import zlib as _zlib
+    try:
+        return _zlib.decompress(_b64.b64decode(ICON_ART_PACKED)).decode()
+    except Exception:
+        return ""
+
+
 def consent_path() -> str:
     # Shared for the same reason as pause.json: opting a directory out from the terminal
     # must also cover the desktop app.
@@ -839,7 +854,9 @@ def main() -> int:
                 elif cwd and not dir_seen(cwd):
                     # First session ever in this directory: the loud version. Consent is
                     # only real if the first encounter cannot be missed.
-                    text = (f"{RED}{BLD}\U0001F534 RECORDING NOTICE{RST} - "
+                    art = icon_art()
+                    text = ((art + "\n" if art else "") +
+                            f"{RED}{BLD}\U0001F534 RECORDING NOTICE{RST} - "
                             f"{BLD}This workspace's sessions are being recorded and uploaded to "
                             f"Kollate{RST} ({CYA}{creds['endpoint']}/app/conversations{RST}) as "
                             "organisational memory, readable by you and your workspace admins. "
