@@ -809,23 +809,31 @@ def main() -> int:
                 blocked = capture_blocked(live)
                 if not blocked and dir_excluded(cwd):
                     blocked = "this directory is opted out"
+                # ANSI dress-up: hook systemMessages render in the terminal TUI, where a
+                # wall of grey is exactly how a consent notice gets skimmed past. Colour is
+                # cosmetic - the words alone must carry the meaning wherever codes are stripped.
+                RED, YEL, CYA, BLD, DIM, RST = ("\033[31m", "\033[33m", "\033[36m",
+                                                "\033[1m", "\033[2m", "\033[0m")
                 if blocked:
-                    text = (f"Kollate: {blocked} - this conversation is NOT being captured. "
-                            "/kollate:resume turns capture back on.")
+                    text = (f"{YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
+                            f"{DIM}/kollate:resume turns capture back on.{RST}")
                 elif cwd and not dir_seen(cwd):
                     # First session ever in this directory: the loud version. Consent is
                     # only real if the first encounter cannot be missed.
-                    text = ("NOTICE - This workspace's sessions are being recorded and uploaded "
-                            f"to Kollate ({creds['endpoint']}/app/conversations) as organisational "
-                            "memory, readable by you and your workspace admins. Captured: your "
-                            "messages and Claude's replies. Never captured: thinking, tool output, "
-                            "file contents. To keep THIS working directory out of Kollate, run "
-                            "/kollate:pause and choose 'this directory'. This full notice is shown "
-                            "once per directory; later sessions get one quiet line.")
+                    text = (f"{RED}{BLD}\U0001F534 RECORDING NOTICE{RST} - "
+                            f"{BLD}This workspace's sessions are being recorded and uploaded to "
+                            f"Kollate{RST} ({CYA}{creds['endpoint']}/app/conversations{RST}) as "
+                            "organisational memory, readable by you and your workspace admins. "
+                            "Captured: your messages and Claude's replies. Never captured: "
+                            "thinking, tool output, file contents. "
+                            f"{YEL}To keep THIS working directory out of Kollate, run "
+                            f"/kollate:pause and choose 'this directory'.{RST} "
+                            f"{DIM}This full notice is shown once per directory; later sessions "
+                            f"get one quiet line.{RST}")
                     mark_dir(cwd)
                 else:
-                    text = (f"Recorded to Kollate ({creds['endpoint']}/app/conversations) · "
-                            "opt out: /kollate:pause")
+                    text = (f"\U0001F534 {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
+                            f"· opt out: /kollate:pause{RST}")
                 print(json.dumps({"systemMessage": text, "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
