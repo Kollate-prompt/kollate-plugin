@@ -192,6 +192,59 @@ def pause_path() -> str:
     return os.path.join(shared_dir(), "pause.json")
 
 
+def current_version() -> str:
+    manifest = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            ".claude-plugin", "plugin.json")
+    try:
+        return str(read_json(manifest, {}).get("version") or "")
+    except Exception:
+        return ""
+
+
+def update_cache_path() -> str:
+    return os.path.join(plugin_dir(), "update-check.json")
+
+
+def _version_tuple(value: str):
+    try:
+        return tuple(int(part) for part in value.split("."))
+    except (ValueError, AttributeError):
+        return ()
+
+
+def maybe_check_update() -> None:
+    """Runs in the detached worker, never in the hook's fast path. At most every 6 hours,
+    ask the marketplace what the newest version is; the next session start reads the answer
+    from disk in microseconds. Silent on every failure - an update nudge is never worth an
+    error."""
+    cache = read_json(update_cache_path(), {})
+    try:
+        if time.time() - float(cache.get("checked_at") or 0) < 6 * 3600:
+            return
+    except (TypeError, ValueError):
+        pass
+    try:
+        import urllib.request
+        with urllib.request.urlopen(
+            "https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
+            "plugins/kollate/.claude-plugin/plugin.json", timeout=5) as response:
+            latest = str(json.loads(response.read().decode()).get("version") or "")
+        write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
+    except Exception:
+        pass
+
+
+def update_nudge() -> str:
+    """One dim line when a newer plugin exists, empty otherwise."""
+    latest = str(read_json(update_cache_path(), {}).get("latest") or "")
+    mine = current_version()
+    if latest and mine and _version_tuple(latest) > _version_tuple(mine):
+        return (f"\n\033[2mKollate {latest} is out (you run {mine}) - update: re-run the "
+                "install command from the Connect page, or `claude plugin update "
+                "kollate@kollate`, then restart Claude.\033[0m")
+    return ""
+
+
 def consent_path() -> str:
     # Shared for the same reason as pause.json: opting a directory out from the terminal
     # must also cover the desktop app.
@@ -709,6 +762,7 @@ def reconcile(live_session_id: str) -> None:
     A crash means no Stop hook ever ran, so nothing was ever spooled. What we do have is the
     watermark - any transcript longer than the last confirmed delivery has unsent turns in it.
     """
+    maybe_check_update()
     creds = credentials()
     if not creds["capture_token"]:
         return
@@ -856,7 +910,7 @@ def main() -> int:
                 else:
                     text = (f"{MARK} {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
                             f"· opt out: /kollate:pause{RST}")
-                print(json.dumps({"systemMessage": text, "suppressOutput": True}))
+                print(json.dumps({"systemMessage": text + update_nudge(), "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
 
