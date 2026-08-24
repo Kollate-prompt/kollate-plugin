@@ -225,14 +225,47 @@ def dir_seen(cwd: str) -> bool:
     return bool(cwd) and os.path.realpath(cwd) in consent_state()["dirs"]
 
 
-def mark_dir(cwd: str, excluded=None) -> None:
+def dir_approved(cwd: str) -> bool:
+    """Has someone said yes to capturing this directory (or a parent)?
+
+    Entries written before approval existed carry no "approved" key: those directories
+    were noticed under the opt-out scheme and kept capturing, so they stay approved -
+    an upgrade must not silently stop what people believed was being kept.
+    """
+    if not cwd:
+        return False
+    dirs = consent_state()["dirs"]
+    path = os.path.realpath(cwd)
+    while True:
+        entry = dirs.get(path)
+        if entry is not None and not entry.get("excluded"):
+            if "approved" not in entry or entry.get("approved"):
+                return True
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+
+
+def mark_dir(cwd: str, excluded=None, approved=None) -> None:
     if not cwd:
         return
     state = consent_state()
     entry = state["dirs"].setdefault(os.path.realpath(cwd), {"seen": time.time()})
     if excluded is not None:
         entry["excluded"] = bool(excluded)
+    if approved is not None:
+        entry["approved"] = bool(approved)
     write_json_private(consent_path(), state)
+
+
+def cmd_record() -> int:
+    cwd = os.getcwd()
+    mark_dir(cwd, excluded=False, approved=True)
+    print(f"Recording ON for {cwd} (and its subdirectories). Sessions here are captured "
+          "to Kollate from now on - nothing from before this moment is taken. "
+          "Change your mind any time with /kollate:pause dir.")
+    return 0
 
 
 def transcript_cwd(path: str) -> str:
@@ -615,8 +648,15 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         return
 
     blocked = capture_blocked(session_id)
-    if not blocked and dir_excluded(transcript_cwd(transcript)):
-        blocked = "directory opted out"
+    if not blocked:
+        session_dir = transcript_cwd(transcript)
+        if dir_excluded(session_dir):
+            blocked = "directory opted out"
+        elif session_dir and not dir_approved(session_dir):
+            # Consent is opt-in per directory: nothing leaves a directory nobody said
+            # yes to. The watermark still advances so a later yes starts from now,
+            # not from the unconsented past.
+            blocked = "directory not yet approved"
     if blocked:
         # Advance the watermark over the delta without sending it, so it is gone for good.
         advance_watermark(session_id, _end, int(mark.get("next_seq", 0)))
@@ -817,20 +857,17 @@ def main() -> int:
                 if blocked:
                     text = (f"{YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
                             f"{DIM}/kollate:resume turns capture back on.{RST}")
-                elif cwd and not dir_seen(cwd):
-                    # First session ever in this directory: the loud version. Consent is
-                    # only real if the first encounter cannot be missed.
-                    text = (f"{RED}{BLD}\U0001F534 RECORDING NOTICE{RST} - "
-                            f"{BLD}This workspace's sessions are being recorded and uploaded to "
-                            f"Kollate{RST} ({CYA}{creds['endpoint']}/app/conversations{RST}) as "
-                            "organisational memory, readable by you and your workspace admins. "
-                            "Captured: your messages and Claude's replies. Never captured: "
-                            "thinking, tool output, file contents. "
-                            f"{YEL}To keep THIS working directory out of Kollate, run "
-                            f"/kollate:pause and choose 'this directory'.{RST} "
-                            f"{DIM}This full notice is shown once per directory; later sessions "
-                            f"get one quiet line.{RST}")
-                    mark_dir(cwd)
+                elif cwd and not dir_approved(cwd):
+                    # A directory nobody said yes to is NOT captured. The first encounter
+                    # asks the question instead of announcing a fait accompli.
+                    text = (f"{YEL}{BLD}\U0001F7E1 KOLLATE ASKS{RST} - {BLD}Should sessions in this "
+                            f"project be recorded to Kollate?{RST} Nothing here is captured until "
+                            "you say yes. Kollate keeps your team's Claude Code conversations as "
+                            f"organisational memory ({CYA}{creds['endpoint']}/app/conversations{RST}), "
+                            "readable by you and your workspace admins - messages and replies only, "
+                            "never thinking, tool output or file contents. "
+                            f"{YEL}Yes: /kollate:record · No: /kollate:pause dir (stops this ask).{RST}")
+                    mark_dir(cwd, approved=False)
                 else:
                     text = (f"\U0001F534 {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
                             f"· opt out: /kollate:pause{RST}")
@@ -866,6 +903,9 @@ def main() -> int:
 
     if command == "resume":
         return cmd_resume()
+
+    if command == "record":
+        return cmd_record()
 
     if command == "connect":
         return connect()
