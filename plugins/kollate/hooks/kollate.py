@@ -192,6 +192,69 @@ def pause_path() -> str:
     return os.path.join(shared_dir(), "pause.json")
 
 
+def consent_path() -> str:
+    # Shared for the same reason as pause.json: opting a directory out from the terminal
+    # must also cover the desktop app.
+    return os.path.join(shared_dir(), "consent.json")
+
+
+def consent_state() -> dict:
+    state = read_json(consent_path(), {})
+    if not isinstance(state.get("dirs"), dict):
+        state["dirs"] = {}
+    return state
+
+
+def dir_excluded(cwd: str) -> bool:
+    """Is this directory - or any parent someone opted out - excluded from capture?"""
+    if not cwd:
+        return False
+    dirs = consent_state()["dirs"]
+    path = os.path.realpath(cwd)
+    while True:
+        entry = dirs.get(path)
+        if entry and entry.get("excluded"):
+            return True
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+
+
+def dir_seen(cwd: str) -> bool:
+    return bool(cwd) and os.path.realpath(cwd) in consent_state()["dirs"]
+
+
+def mark_dir(cwd: str, excluded=None) -> None:
+    if not cwd:
+        return
+    state = consent_state()
+    entry = state["dirs"].setdefault(os.path.realpath(cwd), {"seen": time.time()})
+    if excluded is not None:
+        entry["excluded"] = bool(excluded)
+    write_json_private(consent_path(), state)
+
+
+def transcript_cwd(path: str) -> str:
+    """The working directory a transcript's session ran in, from its own records."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for _ in range(80):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                value = record.get("cwd")
+                if value:
+                    return str(value)
+    except OSError:
+        pass
+    return ""
+
+
 def capture_blocked(session_id: str) -> str:
     """Why capture is off right now, or "" when it is on.
 
@@ -239,8 +302,15 @@ def cmd_pause(scope: str) -> int:
     elif scope in ("stop", "forever", "off"):
         state["until"] = None
         message = "Capture stopped on this machine. /kollate:resume turns it back on."
+    elif scope in ("dir", "directory", "this directory", "here"):
+        cwd = os.getcwd()
+        mark_dir(cwd, excluded=True)
+        print(f"Opted out: sessions in {cwd} (and its subdirectories) are not captured to "
+              "Kollate. Everything already sent stays; nothing new leaves this directory. "
+              "Re-include it by running /kollate:resume here.")
+        return 0
     else:
-        print("Pause what? One of: session · 3h · today · week   (or /kollate:stop)")
+        print("Pause what? One of: session · 3h · today · week · dir (this directory)   (or /kollate:stop)")
         return 1
     write_json_private(pause_path(), state)
     print(message + " Paused turns are dropped, not queued - they will not arrive later.")
@@ -252,7 +322,13 @@ def cmd_resume() -> int:
         os.remove(pause_path())
     except OSError:
         pass
-    print("Capture resumed. New turns from now on are captured; nothing from the pause is.")
+    cwd = os.getcwd()
+    if dir_excluded(cwd):
+        mark_dir(cwd, excluded=False)
+        print("Capture resumed, and this directory is included again. "
+              "New turns from now on are captured; nothing from the pause is.")
+    else:
+        print("Capture resumed. New turns from now on are captured; nothing from the pause is.")
     return 0
 
 
@@ -539,6 +615,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         return
 
     blocked = capture_blocked(session_id)
+    if not blocked and dir_excluded(transcript_cwd(transcript)):
+        blocked = "directory opted out"
     if blocked:
         # Advance the watermark over the delta without sending it, so it is gone for good.
         advance_watermark(session_id, _end, int(mark.get("next_seq", 0)))
@@ -727,14 +805,27 @@ def main() -> int:
         if event.get("source") != "compact":
             creds = credentials()
             if creds["capture_token"] and creds["endpoint"]:
+                cwd = event.get("cwd") or ""
                 blocked = capture_blocked(live)
+                if not blocked and dir_excluded(cwd):
+                    blocked = "this directory is opted out"
                 if blocked:
                     text = (f"Kollate: {blocked} - this conversation is NOT being captured. "
                             "/kollate:resume turns capture back on.")
+                elif cwd and not dir_seen(cwd):
+                    # First session ever in this directory: the loud version. Consent is
+                    # only real if the first encounter cannot be missed.
+                    text = ("NOTICE - This workspace's sessions are being recorded and uploaded "
+                            f"to Kollate ({creds['endpoint']}/app/conversations) as organisational "
+                            "memory, readable by you and your workspace admins. Captured: your "
+                            "messages and Claude's replies. Never captured: thinking, tool output, "
+                            "file contents. To keep THIS working directory out of Kollate, run "
+                            "/kollate:pause and choose 'this directory'. This full notice is shown "
+                            "once per directory; later sessions get one quiet line.")
+                    mark_dir(cwd)
                 else:
-                    text = (f"This conversation is captured to Kollate - {creds['endpoint']}/app/conversations . "
-                            "Keep this session out: /kollate:pause session · pause everything: "
-                            "/kollate:pause 3h|today|week · /kollate:stop")
+                    text = (f"Recorded to Kollate ({creds['endpoint']}/app/conversations) · "
+                            "opt out: /kollate:pause")
                 print(json.dumps({"systemMessage": text, "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
