@@ -192,21 +192,6 @@ def pause_path() -> str:
     return os.path.join(shared_dir(), "pause.json")
 
 
-# The Kollate mark, pre-rendered from the product favicon into truecolor half-blocks -
-# the only image format a terminal TUI reliably shows. Regenerate from the favicon with
-# tools/icon_art.py when the brand changes.
-ICON_ART_PACKED = "eJztWcFxwyAQ/LsFf1yCAMkWQymuwT2kihSYSgJCCHQgbnGkiSaTSfyQteG43T3gyO36VKORRgz+93V99tNz556len19flyf3SvA/NcRJoy4G/kgMD2hemww9Q/7O7Am5TkbbZhSBtjtkozXuxczUE+PPR3OR7kfRIgfvRT0kQTtjM0oA92N0C7/BWR/yrNfqO2nGWhgVlP4E3jjB8SWUsD4AJnlJQLlBnPErVjx9eUY/gkdDiOMylhzLKkqr+EPl3hWDDe6yAq9U/bzsG+WAeUwhA8Bu1DjMqZ2olvtNVV+BStOT03WSGQXhqsTLwCdEYgC4rGTBpNvIrRBJ15z0Dz7OPa4Arjzm1jvdNYLSE6JV83qH0iwRMMKr6l6RH3ZZYuQdh8L7sByElGvUVnBhNGyBBtXMGnz52B9BZYEFXau2ujMJkmKbCJFigIRmee1mN90NdpdjVblg0wAGurcRbEvzC5PI7//+SVyjan7d/YfieZs6PwVp7XlXym8iRZXWOvYL6w/6aDJi6QgpbLf0tW4BQrHb0gKoMgxTf1Z2sDGNIkzGeovFAWFhSKpN09b5wixWrhENkx0S7pae0dx/o02zRfs2desf3FoQ3w8KYSiAtPsgT8UyRkN9TtFsdEphb1y6d903r6xxye/aa9OREPpPLzbQSLLNh6Y2qptY6cCYYKs/cWgbx4aB54iQns8S1XlE/npFzHBzq337xQF7bHKlxprXn23RePF5qzeY5XUT9pCqA2pllsZkJ7YQse7xoT2uM4YhkLisZMGk28jFNYJ0Bwzz84FEC6bElifXL7Wi/PduWGd0nxD11JL4R6Qtm/+0pBZWeilxhk273ZigRQwPhBmIYkObozLVmR8fbmth4snyfDfiGIODzI54I5wOGwP+4edGLahfJONNk15+wZaCtfw"
-
-
-def icon_art() -> str:
-    import base64 as _b64
-    import zlib as _zlib
-    try:
-        return _zlib.decompress(_b64.b64decode(ICON_ART_PACKED)).decode()
-    except Exception:
-        return ""
-
-
 def consent_path() -> str:
     # Shared for the same reason as pause.json: opting a directory out from the terminal
     # must also cover the desktop app.
@@ -848,15 +833,16 @@ def main() -> int:
                 # cosmetic - the words alone must carry the meaning wherever codes are stripped.
                 RED, YEL, CYA, BLD, DIM, RST = ("\033[31m", "\033[33m", "\033[36m",
                                                 "\033[1m", "\033[2m", "\033[0m")
+                # The Kollate mark at glyph size: a four-pointed star in brand lime -
+                # vector-crisp at any font size, unlike raster art in a character grid.
+                MARK = "\033[1m\033[38;2;204;240;63m\u2726\033[0m"
                 if blocked:
                     text = (f"{YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
                             f"{DIM}/kollate:resume turns capture back on.{RST}")
                 elif cwd and not dir_seen(cwd):
                     # First session ever in this directory: the loud version. Consent is
                     # only real if the first encounter cannot be missed.
-                    art = icon_art()
-                    text = ((art + "\n" if art else "") +
-                            f"{RED}{BLD}\U0001F534 RECORDING NOTICE{RST} - "
+                    text = (f"{MARK} {RED}{BLD}RECORDING NOTICE{RST} - "
                             f"{BLD}This workspace's sessions are being recorded and uploaded to "
                             f"Kollate{RST} ({CYA}{creds['endpoint']}/app/conversations{RST}) as "
                             "organisational memory, readable by you and your workspace admins. "
@@ -868,7 +854,7 @@ def main() -> int:
                             f"get one quiet line.{RST}")
                     mark_dir(cwd)
                 else:
-                    text = (f"\U0001F534 {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
+                    text = (f"{MARK} {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
                             f"· opt out: /kollate:pause{RST}")
                 print(json.dumps({"systemMessage": text, "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
