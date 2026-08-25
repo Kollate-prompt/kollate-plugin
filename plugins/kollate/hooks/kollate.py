@@ -929,6 +929,12 @@ def main() -> int:
         session_id = event.get("session_id") or event.get("sessionId") or ""
         if not transcript or not session_id:
             return 0
+        # Deliberately nagging: an out-of-date plugin repeats its yellow block after EVERY
+        # round, not just at session start - the client asked for it to be impossible to
+        # ignore. One cached-file read, microseconds, no network on this path.
+        nag = update_nudge()
+        if nag:
+            print(json.dumps({"systemMessage": nag.lstrip("\n"), "suppressOutput": True}))
         detach(lambda: capture_session(transcript, session_id), "capture-worker", event)
         return 0
 
