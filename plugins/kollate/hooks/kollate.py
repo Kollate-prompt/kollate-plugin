@@ -394,7 +394,20 @@ def cmd_pause(scope: str) -> int:
 def cmd_update() -> int:
     """Bring this desktop to the newest plugin, whichever update path exists here."""
     import shutil
-    latest = str(read_json(update_cache_path(), {}).get("latest") or "")
+    # A person running /kollate:update deserves a live answer, not a cached one: ask the
+    # marketplace right now. On network failure fall through and let the update attempt
+    # itself be the test.
+    latest = ""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(
+            "https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
+            "plugins/kollate/.claude-plugin/plugin.json", timeout=8) as response:
+            latest = str(json.loads(response.read().decode()).get("version") or "")
+        if latest:
+            write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
+    except Exception:
+        latest = ""
     mine = current_version()
     if latest and mine and _version_tuple(latest) <= _version_tuple(mine):
         print(f"Already current: {mine} is the newest version. Nothing to do.")
