@@ -24,6 +24,30 @@ rm -rf "$HOME/.claude/plugins/cache/kollate" \
        "$HOME/.kollate" \
        "$HOME/Library/Caches/claude-code" 2>/dev/null
 
+echo "-> Removing kollate from user settings (stops the desktop app resurrecting old copies)"
+python3 - <<'PYS'
+import json, os
+path = os.path.expanduser("~/.claude/settings.json")
+try:
+    data = json.load(open(path))
+except Exception:
+    data = None
+if data:
+    touched = False
+    for section in ("enabledPlugins", "pluginConfigs", "extraKnownMarketplaces"):
+        block = data.get(section)
+        if isinstance(block, dict):
+            for key in [k for k in block if "kollate" in k.lower()]:
+                del block[key]
+                touched = True
+    if touched:
+        json.dump(data, open(path, "w"), indent=2)
+        print("   settings scrubbed")
+PYS
+
+echo "-> Deleting the desktop app's own stale kollate copies"
+find "$HOME/Library/Application Support/Claude" -depth -iname '*kollate*' -exec rm -rf {} \; 2>/dev/null
+
 echo "-> Scrubbing kollate from project-level Claude settings"
 python3 - <<'PY'
 import glob, json, os
