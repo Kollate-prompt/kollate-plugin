@@ -413,21 +413,28 @@ def cmd_update() -> int:
     if latest and mine and _version_tuple(latest) <= _version_tuple(mine):
         print(f"Already current: {mine} is the newest version. Nothing to do.")
         return 0
+    print(f"This chat is running: {mine or 'unknown'}")
+    print(f"Newest on the marketplace: {latest or 'could not check'}")
     claude_cli = shutil.which("claude")
     if claude_cli:
         result = subprocess.run([claude_cli, "plugin", "update", "kollate@kollate"],
                                 capture_output=True, text=True, timeout=120)
+        detail = next((line.strip() for line in (result.stdout + result.stderr).splitlines()
+                       if "updated" in line.lower() or "latest" in line.lower()), "").lstrip("\u2714 ").strip()
         if result.returncode == 0:
-            print("Updated. Now quit Claude COMPLETELY, open it again, and start a NEW chat. "
-                  "A resumed session keeps running its old plugin copy - on the desktop app each "
-                  "session pins the plugin version it started with, so only new sessions get "
-                  "the update.")
+            print("Terminal registry: " + (detail or "updated"))
+            print("Now quit Claude COMPLETELY, open it again, and start a NEW chat - a resumed "
+                  "session keeps running its old plugin copy.")
+            print("IMPORTANT on the desktop app: it keeps its OWN plugin registry, separate from "
+                  "the terminal's. Also press Update on Settings > Plugins > Kollate there - "
+                  "otherwise desktop chats keep starting on the old version.")
             return 0
         print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
     else:
         print("The claude CLI is not on PATH here.")
-    print("Update by hand instead: Settings > Plugins > Kollate > Update, then quit Claude "
-          "completely and reopen. Or run the install command from the Connect page in a terminal.")
+    print("Update by hand: Settings > Plugins > Kollate > Update, then quit Claude completely, "
+          "reopen and start a NEW chat. Or run the install command from the Connect page in a "
+          "terminal.")
     return 1
 
 
