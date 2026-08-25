@@ -929,7 +929,7 @@ def main() -> int:
                     text = (f"{MARK} {RED}{BLD}RECORDING NOTICE{RST} - "
                             f"{BLD}This workspace's sessions are being recorded and uploaded to "
                             f"Kollate{RST} ({CYA}{creds['endpoint']}/app/conversations{RST}) as "
-                            "organisational memory, readable by you and your workspace admins. "
+                            "organisational memory, readable by everyone in your workspace. "
                             "Captured: your messages and Claude's replies. Never captured: "
                             "thinking, tool output, file contents. "
                             f"{YEL}To keep THIS working directory out of Kollate, run "
