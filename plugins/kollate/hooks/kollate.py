@@ -235,13 +235,15 @@ def maybe_check_update() -> None:
 
 
 def update_nudge() -> str:
-    """One dim line when a newer plugin exists, empty otherwise."""
+    """A loud yellow block when a newer plugin exists, empty otherwise."""
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
     mine = current_version()
     if latest and mine and _version_tuple(latest) > _version_tuple(mine):
-        return (f"\n\033[2mKollate {latest} is out (you run {mine}) - update: re-run the "
-                "install command from the Connect page, or `claude plugin update "
-                "kollate@kollate`, then restart Claude.\033[0m")
+        YB, RST = "\033[1m\033[33m", "\033[0m"
+        return ("\n" + YB + "\u26A0\ufe0f  KOLLATE UPDATE NEEDED - version " + latest +
+                " is out, this desktop runs " + mine + "." + RST + "\n" +
+                YB + "Run /kollate:update, then quit Claude completely and reopen." + RST + "\n" +
+                "\033[2m(No terminal? Settings > Plugins > Kollate > Update, then restart.)\033[0m")
     return ""
 
 
@@ -387,6 +389,30 @@ def cmd_pause(scope: str) -> int:
     write_json_private(pause_path(), state)
     print(message + " Paused turns are dropped, not queued - they will not arrive later.")
     return 0
+
+
+def cmd_update() -> int:
+    """Bring this desktop to the newest plugin, whichever update path exists here."""
+    import shutil
+    latest = str(read_json(update_cache_path(), {}).get("latest") or "")
+    mine = current_version()
+    if latest and mine and _version_tuple(latest) <= _version_tuple(mine):
+        print(f"Already current: {mine} is the newest version. Nothing to do.")
+        return 0
+    claude_cli = shutil.which("claude")
+    if claude_cli:
+        result = subprocess.run([claude_cli, "plugin", "update", "kollate@kollate"],
+                                capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            print("Updated. Now quit Claude COMPLETELY and open it again - "
+                  "plugins load at startup, so the new version starts working after the restart.")
+            return 0
+        print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
+    else:
+        print("The claude CLI is not on PATH here.")
+    print("Update by hand instead: Settings > Plugins > Kollate > Update, then quit Claude "
+          "completely and reopen. Or run the install command from the Connect page in a terminal.")
+    return 1
 
 
 def cmd_status() -> int:
@@ -997,6 +1023,9 @@ def main() -> int:
 
     if command == "status":
         return cmd_status()
+
+    if command == "update":
+        return cmd_update()
 
     if command == "connect":
         return connect()
