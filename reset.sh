@@ -52,5 +52,14 @@ echo "-> Installing fresh"
 curl -fsSL https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/install.sh | bash -s -- "$URL"
 
 echo ""
-echo "  Reset complete. Quit Claude COMPLETELY, reopen, start a NEW chat,"
-echo "  run /kollate:connect once, then /kollate:status should show the newest version."
+echo "-> Connecting this desktop (your browser will open - approve the sign-in)"
+HOOK=$(ls -d "$HOME"/.claude/plugins/cache/kollate/kollate/*/hooks/kollate.py 2>/dev/null | sort -V | tail -1)
+if [ -n "$HOOK" ] && python3 "$HOOK" connect; then
+  echo ""
+  echo "  Reset complete and connected. Last step: quit Claude COMPLETELY, reopen,"
+  echo "  and start a NEW chat - /kollate:status there should show the newest version."
+else
+  echo ""
+  echo "  Reset complete, but the sign-in did not finish. After restarting Claude,"
+  echo "  run /kollate:connect in a new chat to connect this desktop."
+fi
