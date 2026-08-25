@@ -611,7 +611,7 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
     try:
         result = subprocess.run(
             [
-                "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                "curl", "-s", "-o", os.devnull, "-w", "%{http_code}",
                 "--max-time", str(CONNECT_TIMEOUT_SECONDS),
                 "-X", "POST", f"{creds['api_base']}/functions/v1/capture",
                 "--config", "-",
@@ -641,14 +641,33 @@ def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
     re-reads turns that were already delivered and re-sends them under sequence numbers that
     now belong to different content. That is worse than a duplicate: it overwrites history.
     """
-    import fcntl
+    try:
+        import fcntl
+
+        def _lock(fd):
+            fcntl.flock(fd, fcntl.LOCK_EX)
+
+        def _unlock(fd):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except ImportError:  # Windows: same exclusive-lock semantics via msvcrt
+        import msvcrt
+
+        def _lock(fd):
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
+        def _unlock(fd):
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
 
     path = watermark_path()
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     lock_path = f"{path}.lock"
     lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        _lock(lock_fd)
         marks = read_json(path, {})
         current = marks.get(session_id) or {"offset": 0, "next_seq": 0}
         if offset <= int(current.get("offset", 0)):
@@ -656,7 +675,7 @@ def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
         marks[session_id] = {"offset": offset, "next_seq": next_seq}
         write_json_private(path, marks)
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        _unlock(lock_fd)
         os.close(lock_fd)
 
 
@@ -1098,7 +1117,7 @@ def connect() -> int:
     # nothing would otherwise look like a sign-in that simply never completed.
     try:
         probe = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", endpoint],
+            ["curl", "-s", "-o", os.devnull, "-w", "%{http_code}", "--max-time", "10", endpoint],
             capture_output=True, text=True, timeout=20,
         )
         if not (probe.stdout or "").strip().startswith(("2", "3", "4")):
@@ -1117,7 +1136,8 @@ def connect() -> int:
     state = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
     received: dict[str, str] = {}
 
-    label = f"{os.uname().nodename}"
+    import platform
+    label = platform.node() or "unnamed-desktop"
     # Filled in by the handler thread, read by this one once it is done.
     outcome: dict[str, object] = {}
 
