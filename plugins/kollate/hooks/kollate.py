@@ -242,7 +242,8 @@ def update_nudge() -> str:
         YB, RST = "\033[1m\033[33m", "\033[0m"
         return ("\n" + YB + "\u26A0\ufe0f  KOLLATE UPDATE NEEDED - version " + latest +
                 " is out, this desktop runs " + mine + "." + RST + "\n" +
-                YB + "Run /kollate:update, then quit Claude completely and reopen." + RST + "\n" +
+                YB + "Run /kollate:update, then quit Claude completely, reopen, and start a "
+                "NEW chat - a resumed session keeps its old plugin copy." + RST + "\n" +
                 "\033[2m(No terminal? Settings > Plugins > Kollate > Update, then restart.)\033[0m")
     return ""
 
@@ -417,8 +418,10 @@ def cmd_update() -> int:
         result = subprocess.run([claude_cli, "plugin", "update", "kollate@kollate"],
                                 capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
-            print("Updated. Now quit Claude COMPLETELY and open it again - "
-                  "plugins load at startup, so the new version starts working after the restart.")
+            print("Updated. Now quit Claude COMPLETELY, open it again, and start a NEW chat. "
+                  "A resumed session keeps running its old plugin copy - on the desktop app each "
+                  "session pins the plugin version it started with, so only new sessions get "
+                  "the update.")
             return 0
         print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
     else:
