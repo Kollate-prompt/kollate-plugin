@@ -213,13 +213,13 @@ def _version_tuple(value: str):
 
 
 def maybe_check_update() -> None:
-    """Runs in the detached worker, never in the hook's fast path. At most every 6 hours,
+    """Runs in the detached worker, never in the hook's fast path. At most every 2 hours,
     ask the marketplace what the newest version is; the next session start reads the answer
     from disk in microseconds. Silent on every failure - an update nudge is never worth an
     error."""
     cache = read_json(update_cache_path(), {})
     try:
-        if time.time() - float(cache.get("checked_at") or 0) < 6 * 3600:
+        if time.time() - float(cache.get("checked_at") or 0) < 2 * 3600:
             return
     except (TypeError, ValueError):
         pass
