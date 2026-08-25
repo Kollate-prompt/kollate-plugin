@@ -389,6 +389,36 @@ def cmd_pause(scope: str) -> int:
     return 0
 
 
+def cmd_status() -> int:
+    """Everything support would ask for, in one pasteable block. Local reads only."""
+    creds = credentials()
+    version = current_version() or "unknown"
+    connected = bool(creds.get("capture_token") and creds.get("api_base"))
+    lines = [f"Kollate plugin {version}"]
+    lines.append(f"Endpoint: {creds.get('endpoint') or '(none)'}")
+    lines.append("Connected: " + ("yes" if connected else "NO - run /kollate:connect"))
+    blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+    cwd = os.getcwd()
+    if dir_excluded(cwd):
+        lines.append(f"This directory: OPTED OUT ({cwd}) - /kollate:resume here re-includes it")
+    else:
+        lines.append(f"This directory: captured ({cwd})")
+    lines.append("Pause state: " + (blocked if blocked else "not paused"))
+    marks = read_json(watermark_path(), {})
+    lines.append(f"Sessions tracked on this desktop: {len(marks)}")
+    try:
+        import datetime
+        stamp = os.path.getmtime(watermark_path())
+        lines.append("Last delivery activity: " + datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S"))
+    except OSError:
+        lines.append("Last delivery activity: never")
+    latest = str(read_json(update_cache_path(), {}).get("latest") or "")
+    if latest:
+        lines.append(f"Newest version on the marketplace: {latest}")
+    print("\n".join(lines))
+    return 0
+
+
 def cmd_resume() -> int:
     try:
         os.remove(pause_path())
@@ -889,7 +919,7 @@ def main() -> int:
                                                 "\033[1m", "\033[2m", "\033[0m")
                 # The Kollate mark at glyph size: a four-pointed star in brand lime -
                 # vector-crisp at any font size, unlike raster art in a character grid.
-                MARK = "\033[1m\033[38;2;204;240;63m\u2726\033[0m"
+                MARK = "\033[1m\033[38;2;204;240;63m\u2715\033[0m"
                 if blocked:
                     text = (f"{YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
                             f"{DIM}/kollate:resume turns capture back on.{RST}")
@@ -945,6 +975,9 @@ def main() -> int:
 
     if command == "record":
         return cmd_record()
+
+    if command == "status":
+        return cmd_status()
 
     if command == "connect":
         return connect()
