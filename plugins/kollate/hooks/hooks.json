@@ -1,13 +1,13 @@
 {
   "hooks": {
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "python3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture || python -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture || python -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture || py -3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture" } ] }
     ],
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "python3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture || python -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture || python -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture || py -3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py capture" } ] }
     ],
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "python3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py reconcile || python -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py reconcile" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py reconcile || python -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py reconcile || py -3 -S -E ${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py reconcile" } ] }
     ]
   }
 }

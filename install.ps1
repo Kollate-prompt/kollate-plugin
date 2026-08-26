@@ -19,7 +19,7 @@ function Test-Python($exe) {
   try { $out = & $exe -c "print('kollate-ok')" 2>$null; return ($out -eq 'kollate-ok') } catch { return $false }
 }
 $py = $null
-foreach ($candidate in @('python', 'python3')) {
+foreach ($candidate in @('python', 'python3', 'py')) {
   if (Test-Python $candidate) { $py = $candidate; break }
 }
 if (-not $py) {

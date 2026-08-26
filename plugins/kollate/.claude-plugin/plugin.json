@@ -1,6 +1,6 @@
 {
   "name": "kollate",
-  "version": "0.4.18",
+  "version": "0.4.19",
   "description": "Capture your Claude Code conversations into your organisation's Kollate workspace",
   "author": {
     "name": "Kollate"
