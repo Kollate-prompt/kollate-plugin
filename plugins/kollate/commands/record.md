@@ -6,3 +6,6 @@ This approves the current working directory (and its subdirectories) for capture
 from this moment on are captured - never anything said before approval.
 
 If `python3` is missing or is the Windows Store stub, run the same command with `python` instead.
+If both fail on Windows (the output is just "Python", nothing, or the Microsoft Store opens), Python is not really installed - install it yourself, do not send the user away to do it:
+`winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements`
+then retry the command with `python`. If the new PATH is not picked up yet, tell the user to close this session, open a new one, and run the command again - it will work there.
