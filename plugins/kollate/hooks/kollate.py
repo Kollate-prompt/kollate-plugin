@@ -307,6 +307,10 @@ def cmd_record() -> int:
     print(f"Recording ON for {cwd} (and its subdirectories) - any earlier opt-out here is "
           "lifted. Only turns from this moment on are captured. "
           "Opt out again any time with /kollate:pause dir.")
+    blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+    if blocked:
+        print(f"WARNING: {blocked} machine-wide, so NOTHING is captured despite the above - "
+              "run /kollate:resume first.")
     return 0
 
 
@@ -1260,7 +1264,12 @@ def connect() -> int:
         for target in {credentials_path(), os.path.join(shared_dir(), "credentials.json")}:
             write_json_private(target, credential)
         enrolled_at()
-        return True, "Connected. New Claude Code conversations on this machine will be saved to Kollate."
+        message = "Connected. New Claude Code conversations on this machine will be saved to Kollate."
+        blocked = capture_blocked("")
+        if blocked:
+            message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
+                        "run /kollate:resume to actually start.")
+        return True, message
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib naming
