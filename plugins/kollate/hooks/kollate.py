@@ -201,6 +201,9 @@ def current_version() -> str:
         return ""
 
 
+# The Kollate mark - the logo's lime X - leads every user-facing message.
+KMARK = "\033[1m\033[38;2;204;240;63m\u2715\033[0m "
+
 def update_cache_path() -> str:
     return os.path.join(plugin_dir(), "update-check.json")
 
@@ -241,7 +244,7 @@ def update_nudge() -> str:
     if latest and mine and _version_tuple(latest) > _version_tuple(mine):
         # Calm one-liner by the client's request (28.08) - the old yellow block read as an
         # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
-        return ("\nRun /kollate:update and relaunch Claude: version " + latest)
+        return ("\n" + KMARK + "Run /kollate:update and relaunch Claude: version " + latest)
     return ""
 
 
@@ -301,7 +304,7 @@ def mark_dir(cwd: str, excluded=None, approved=None) -> None:
 def cmd_record() -> int:
     cwd = os.getcwd()
     mark_dir(cwd, excluded=False, approved=True)
-    print(f"Recording ON for {cwd} (and its subdirectories) - any earlier opt-out here is "
+    print(f"{KMARK}Recording ON for {cwd} (and its subdirectories) - any earlier opt-out here is "
           "lifted. Only turns from this moment on are captured. "
           "Opt out again any time with /kollate:pause dir.")
     blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
@@ -358,7 +361,7 @@ def cmd_pause(scope: str) -> int:
     if scope in ("session", "this session", "this"):
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
         if not sid:
-            print("Could not tell which session this is. Use a duration instead: /kollate:pause 3h")
+            print(KMARK + "Could not tell which session this is. Use a duration instead: /kollate:pause 3h")
             return 1
         sessions = set(state.get("sessions") or [])
         sessions.add(sid)
@@ -381,12 +384,12 @@ def cmd_pause(scope: str) -> int:
     elif scope in ("dir", "directory", "this directory", "here"):
         cwd = os.getcwd()
         mark_dir(cwd, excluded=True)
-        print(f"Opted out: sessions in {cwd} (and its subdirectories) are not captured to "
+        print(f"{KMARK}Opted out: sessions in {cwd} (and its subdirectories) are not captured to "
               "Kollate. Everything already sent stays; nothing new leaves this directory. "
               "Re-include it by running /kollate:resume here.")
         return 0
     else:
-        print("Pause what? One of: session · 3h · today · week · dir (this directory)   (or /kollate:stop)")
+        print(KMARK + "Pause what? One of: session · 3h · today · week · dir (this directory)   (or /kollate:stop)")
         return 1
     write_json_private(pause_path(), state)
     print(message + " Paused turns are dropped, not queued - they will not arrive later.")
@@ -412,9 +415,9 @@ def cmd_update() -> int:
         latest = ""
     mine = current_version()
     if latest and mine and _version_tuple(latest) <= _version_tuple(mine):
-        print(f"Already current: {mine} is the newest version. Nothing to do.")
+        print(f"{KMARK}Already current: {mine} is the newest version. Nothing to do.")
         return 0
-    print(f"This chat is running: {mine or 'unknown'}")
+    print(f"{KMARK}This chat is running: {mine or 'unknown'}")
     print(f"Newest on the marketplace: {latest or 'could not check'}")
     claude_cli = shutil.which("claude")
     if claude_cli:
@@ -444,7 +447,7 @@ def cmd_status() -> int:
     creds = credentials()
     version = current_version() or "unknown"
     connected = bool(creds.get("capture_token") and creds.get("api_base"))
-    lines = [f"Kollate plugin {version}"]
+    lines = [f"{KMARK}Kollate plugin {version}"]
     lines.append(f"Endpoint: {creds.get('endpoint') or '(none)'}")
     lines.append("Connected: " + ("yes" if connected else "NO - run /kollate:connect"))
     blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
@@ -477,10 +480,10 @@ def cmd_resume() -> int:
     cwd = os.getcwd()
     if dir_excluded(cwd):
         mark_dir(cwd, excluded=False)
-        print("Capture resumed, and this directory is included again. "
+        print(KMARK + "Capture resumed, and this directory is included again. "
               "New turns from now on are captured; nothing from the pause is.")
     else:
-        print("Capture resumed. New turns from now on are captured; nothing from the pause is.")
+        print(KMARK + "Capture resumed. New turns from now on are captured; nothing from the pause is.")
     return 0
 
 
@@ -818,7 +821,7 @@ def backfill(limit: int) -> int:
     """
     creds = credentials()
     if not creds["capture_token"]:
-        print("This machine is not connected. Run /kollate:connect first.")
+        print(KMARK + "This machine is not connected. Run /kollate:connect first.")
         return 1
 
     cutoff = enrolled_at()
@@ -842,10 +845,10 @@ def backfill(limit: int) -> int:
     candidates.sort(reverse=True)  # most recent history first - the useful end of it
     selected = candidates[:limit]
     if not selected:
-        print("No conversations from before this machine was connected.")
+        print(KMARK + "No conversations from before this machine was connected.")
         return 0
 
-    print(f"Sending {len(selected)} conversation(s) from before this machine was connected.")
+    print(f"{KMARK}Sending {len(selected)} conversation(s) from before this machine was connected.")
     if len(candidates) > len(selected):
         print(f"{len(candidates) - len(selected)} older one(s) not sent - run again to continue.")
 
@@ -994,7 +997,7 @@ def main() -> int:
                                                 "\033[1m", "\033[2m", "\033[0m")
                 # The Kollate mark at glyph size: a four-pointed star in brand lime -
                 # vector-crisp at any font size, unlike raster art in a character grid.
-                MARK = "\033[1m\033[38;2;204;240;63m\u2715\033[0m"
+                MARK = KMARK.rstrip()
                 if blocked:
                     text = (f"{YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
                             f"{DIM}/kollate:resume turns capture back on.{RST}")
@@ -1180,10 +1183,10 @@ def connect() -> int:
             capture_output=True, text=True, timeout=20,
         )
         if not (probe.stdout or "").strip().startswith(("2", "3", "4")):
-            print(f"{endpoint} did not respond. Check the address and try again.")
+            print(f"{KMARK}{endpoint} did not respond. Check the address and try again.")
             return 1
     except Exception:
-        print(f"{endpoint} could not be reached. Check the address and try again.")
+        print(f"{KMARK}{endpoint} could not be reached. Check the address and try again.")
         return 1
 
     probe = socket.socket()
@@ -1261,7 +1264,7 @@ def connect() -> int:
         for target in {credentials_path(), os.path.join(shared_dir(), "credentials.json")}:
             write_json_private(target, credential)
         enrolled_at()
-        message = "Connected. New Claude Code conversations on this machine will be saved to Kollate."
+        message = KMARK + "Connected. New Claude Code conversations on this machine will be saved to Kollate."
         blocked = capture_blocked("")
         if blocked:
             message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
@@ -1315,7 +1318,7 @@ def connect() -> int:
         f"{endpoint}/connect-machine?redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
         f"&state={state}&label={urllib.parse.quote(label, safe='')}"
     )
-    print("Opening your browser to sign in to Kollate...")
+    print(KMARK + "Opening your browser to sign in to Kollate...")
     if not webbrowser.open(url):
         print(f"Open this link to finish connecting:\n  {url}")
 
