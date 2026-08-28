@@ -187,6 +187,40 @@ def credentials() -> dict:
     }
 
 
+def install_statusline() -> str:
+    """Wire an always-visible recording light into the terminal's status line.
+
+    Two hard rules: an existing statusLine in settings.json is NEVER touched (it is
+    somebody's own setup), and the attempt happens ONCE per machine - a flag file
+    remembers it, so a person who deletes the setting is never re-nagged by it.
+    Returns a one-line note when the status line was actually installed, else "".
+    """
+    flag = os.path.join(shared_dir(), "statusline-offered")
+    if os.path.exists(flag):
+        return ""
+    try:
+        os.makedirs(shared_dir(), mode=0o700, exist_ok=True)
+        with open(flag, "w") as handle:
+            handle.write(str(time.time()))
+        import shutil
+        target = os.path.join(shared_dir(), "statusline.py")
+        shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "statusline.py"), target)
+        settings_path = os.path.expanduser("~/.claude/settings.json")
+        settings = read_json(settings_path, {})
+        if not isinstance(settings, dict) or settings.get("statusLine"):
+            return ""
+        settings["statusLine"] = {
+            "type": "command",
+            "command": f'python3 "{target}" || python "{target}" || py -3 "{target}"',
+        }
+        write_json_private(settings_path, settings)
+        return (" The terminal status line now shows recording state "
+                "(remove: statusLine in ~/.claude/settings.json).")
+    except Exception:
+        return ""
+
+
 def pause_path() -> str:
     # Shared, deliberately: pausing from the terminal must also pause the desktop app.
     return os.path.join(shared_dir(), "pause.json")
@@ -1009,6 +1043,8 @@ def main() -> int:
         # repeat it mid-conversation. People should not have to discover monitoring.
         if event.get("source") != "compact":
             creds = credentials()
+            if creds["capture_token"]:
+                install_statusline()  # once per machine ever; silent, never overrides
             if not (creds["capture_token"] and creds["endpoint"]):
                 # Installed but never connected: say so in red, once per session. Silence here
                 # reads as "working", which is the exact confusion the client hit (28.08).
@@ -1303,7 +1339,7 @@ def connect() -> int:
         if blocked:
             message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
                         "run /kollate:resume to actually start.")
-        return True, message
+        return True, message + install_statusline()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib naming
