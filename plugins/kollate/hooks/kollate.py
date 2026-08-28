@@ -242,6 +242,15 @@ def update_nudge() -> str:
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
     mine = current_version()
     if latest and mine and _version_tuple(latest) > _version_tuple(mine):
+        # A newer copy already sitting on disk means the person has ALREADY updated and this
+        # session is simply still running its old copy. Claude itself says "Restart required"
+        # at update time - nagging again every turn on top of that is noise, so: silence.
+        try:
+            version_dirs = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            if any(_version_tuple(name) > _version_tuple(mine) for name in os.listdir(version_dirs)):
+                return ""
+        except Exception:
+            pass
         # Calm one-liner by the client's request (28.08) - the old yellow block read as an
         # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
         return ("\n" + KMARK + "Run /kollate:update and relaunch Claude: version " + latest)
