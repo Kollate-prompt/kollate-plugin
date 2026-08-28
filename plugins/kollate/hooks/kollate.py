@@ -239,12 +239,9 @@ def update_nudge() -> str:
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
     mine = current_version()
     if latest and mine and _version_tuple(latest) > _version_tuple(mine):
-        YB, RST = "\033[1m\033[33m", "\033[0m"
-        return ("\n" + YB + "\u26A0\ufe0f  KOLLATE UPDATE NEEDED - version " + latest +
-                " is out, this desktop runs " + mine + "." + RST + "\n" +
-                YB + "Run /kollate:update, then quit Claude completely, reopen, and start a "
-                "NEW chat - a resumed session keeps its old plugin copy." + RST + "\n" +
-                "\033[2m(No terminal? Settings > Plugins > Kollate > Update, then restart.)\033[0m")
+        # Calm one-liner by the client's request (28.08) - the old yellow block read as an alarm.
+        return ("\nRelaunch Claude to update Kollate: version " + latest +
+                "\033[2m (or run /kollate:update)\033[0m")
     return ""
 
 
