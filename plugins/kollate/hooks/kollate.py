@@ -239,9 +239,9 @@ def update_nudge() -> str:
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
     mine = current_version()
     if latest and mine and _version_tuple(latest) > _version_tuple(mine):
-        # Calm one-liner by the client's request (28.08) - the old yellow block read as an alarm.
-        return ("\nRelaunch Claude to update Kollate: version " + latest +
-                "\033[2m (or run /kollate:update)\033[0m")
+        # Calm one-liner by the client's request (28.08) - the old yellow block read as an
+        # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
+        return ("\nRun /kollate:update and relaunch Claude: version " + latest)
     return ""
 
 
