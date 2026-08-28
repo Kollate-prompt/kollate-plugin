@@ -820,7 +820,12 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         advance_watermark(session_id, batch_end, seq)
 
 
-def backfill(limit: int) -> int:
+def _project_slug(path: str) -> str:
+    """The directory name Claude Code gives a working directory under ~/.claude/projects."""
+    return "".join(ch if ch.isalnum() else "-" for ch in os.path.realpath(path))
+
+
+def backfill(limit: int, scope: str = "dir") -> int:
     """Capture conversations from BEFORE this machine was enrolled. Opt-in, and bounded.
 
     This is the one path that reaches backwards into somebody's history, so it is a command a
@@ -835,8 +840,15 @@ def backfill(limit: int) -> int:
 
     cutoff = enrolled_at()
     marks = read_json(watermark_path(), {})
+    # The default reaches back only into THIS directory's history (and its subdirectories) -
+    # per the client 28.08: whole-machine history is a bigger grab than anyone expects from a
+    # command they run inside one project. /kollate:backfill all is the deliberate wide net.
+    here = _project_slug(os.getcwd())
     candidates = []
     for directory, _subdirs, files in os.walk(os.path.expanduser("~/.claude/projects")):
+        base = os.path.basename(directory)
+        if scope != "all" and not (base == here or base.startswith(here + "-")):
+            continue
         for name in files:
             if not name.endswith(".jsonl"):
                 continue
@@ -854,10 +866,13 @@ def backfill(limit: int) -> int:
     candidates.sort(reverse=True)  # most recent history first - the useful end of it
     selected = candidates[:limit]
     if not selected:
-        print(KMARK + "No conversations from before this machine was connected.")
+        where = "this machine" if scope == "all" else "this directory"
+        print(KMARK + f"No conversations in {where} from before this machine was connected."
+              + ("" if scope == "all" else " (/kollate:backfill all searches the whole machine.)"))
         return 0
 
-    print(f"{KMARK}Sending {len(selected)} conversation(s) from before this machine was connected.")
+    where = "this machine" if scope == "all" else "this directory"
+    print(f"{KMARK}Sending {len(selected)} conversation(s) from {where}'s pre-connection history.")
     if len(candidates) > len(selected):
         print(f"{len(candidates) - len(selected)} older one(s) not sent - run again to continue.")
 
@@ -994,6 +1009,14 @@ def main() -> int:
         # repeat it mid-conversation. People should not have to discover monitoring.
         if event.get("source") != "compact":
             creds = credentials()
+            if not (creds["capture_token"] and creds["endpoint"]):
+                # Installed but never connected: say so in red, once per session. Silence here
+                # reads as "working", which is the exact confusion the client hit (28.08).
+                RED, DIM, RST = "\033[31m", "\033[2m", "\033[0m"
+                print(json.dumps({"systemMessage":
+                    f"{RED}\u2715{RST} {DIM}Kollate is not recording - this machine is not "
+                    f"connected. {RST}{RED}/kollate:connect{RST}{DIM} sets it up.{RST}",
+                    "suppressOutput": True}))
             if creds["capture_token"] and creds["endpoint"]:
                 cwd = event.get("cwd") or ""
                 blocked = capture_blocked(live)
@@ -1008,7 +1031,8 @@ def main() -> int:
                 # vector-crisp at any font size, unlike raster art in a character grid.
                 MARK = KMARK.rstrip()
                 if blocked:
-                    text = (f"{YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
+                    YMARK = f"{YEL}\u2715{RST}"
+                    text = (f"{YMARK} {YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
                             f"{DIM}/kollate:resume turns capture back on.{RST}")
                 elif cwd and not dir_seen(cwd):
                     # First session ever in this directory: the loud version. Consent is
@@ -1052,7 +1076,8 @@ def main() -> int:
                     limit = max(1, min(int(argument.split("=", 1)[1]), BACKFILL_MAX_LIMIT))
                 except ValueError:
                     pass
-        return backfill(limit)
+        scope = "all" if "all" in sys.argv[2:] else "dir"
+        return backfill(limit, scope)
 
     if command == "pause":
         return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
