@@ -1382,7 +1382,7 @@ def connect() -> int:
     server.timeout = 30
 
     def serve_until_answered() -> None:
-        deadline = time.time() + 180
+        deadline = time.time() + 300
         while "ok" not in outcome and time.time() < deadline:
             server.handle_request()  # returns on timeout too, which re-checks the deadline
 
@@ -1394,8 +1394,11 @@ def connect() -> int:
         f"&state={state}&label={urllib.parse.quote(label, safe='')}"
     )
     print(KMARK + "Opening your browser to sign in to Kollate...")
-    if not webbrowser.open(url):
-        print(f"Open this link to finish connecting:\n  {url}")
+    # ALWAYS print the link. webbrowser.open() returning True proves nothing on the desktop
+    # app (30.08: a Windows user sat in front of "visit the link it provided" with no link
+    # anywhere and the flow timed out). The URL is made to be visited - it is not a secret.
+    webbrowser.open(url)
+    print(f"If no browser tab opened, use this link to sign in:\n  {url}")
 
     thread.join(timeout=185)
     print(outcome.get("message") or "Sign-in did not complete. Nothing was changed.")

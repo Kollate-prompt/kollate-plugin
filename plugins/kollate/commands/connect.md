@@ -1,7 +1,7 @@
 ---
 description: Connect this machine to your Kollate account
 ---
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" connect` and report the result to the user in one line. Do not print or repeat any value the command outputs beyond its final status line.
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" connect` and report the result to the user in one line. EXCEPTION: if the output contains a sign-in link (a URL to visit), show that link to the user prominently and tell them to open it - without it they cannot finish connecting. Never repeat any other value from the output (tokens, secrets, ids).
 
 If `python3` is missing or is the Windows Store stub, run the same command with `python` instead, and if that also fails, with `py -3` (the Windows launcher - present even when Python was installed without updating PATH).
 If all three fail on Windows (the output is just "Python", nothing, or the Microsoft Store opens), Python is not really installed - install it yourself, do not send the user away to do it:
