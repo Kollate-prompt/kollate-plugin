@@ -25,6 +25,15 @@ import sys
 import time
 import urllib.parse
 
+# Windows consoles default to legacy codepages (cp1252, cp1255...) that cannot encode the
+# Kollate mark - found on the Windows bench 30.08 when every print crashed with
+# UnicodeEncodeError. Output is ours to define: UTF-8, replacing what a stream can't take.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # The server refuses anything over 4 MB. Split well under it rather than failing forever on
 # one oversized turn.
 MAX_DELIVERY_BYTES = 3 * 1024 * 1024

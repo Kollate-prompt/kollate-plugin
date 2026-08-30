@@ -10,6 +10,15 @@ import os
 import sys
 import time
 
+# Windows consoles default to legacy codepages (cp1252, cp1255...) that cannot encode the
+# Kollate mark - found on the Windows bench 30.08 when every print crashed with
+# UnicodeEncodeError. Output is ours to define: UTF-8, replacing what a stream can't take.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 KOLLATE = os.path.expanduser("~/.kollate")
 
 
