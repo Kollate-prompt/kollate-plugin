@@ -17,6 +17,7 @@ DIRS=(
   "$CONFIG_DIR/plugins/marketplaces/kollate"
   "$CONFIG_DIR/plugins/cache/kollate"
   "$CONFIG_DIR/plugins/data/kollate-kollate"
+  "$CONFIG_DIR/plugins/data/kollate-inline"
   "$HOME/.kollate"
 )
 
@@ -72,6 +73,13 @@ def scrub(path, containers):
     except Exception:
         return
     changed = False
+    # The status line we installed points into ~/.kollate, which this script deletes. Left
+    # behind it is a command Claude runs on every render against a file that is gone. Only
+    # ours goes - somebody else's status line is not ours to touch.
+    status = data.get("statusLine")
+    if isinstance(status, dict) and "statusline.py" in str(status.get("command", "")).lower():
+        del data["statusLine"]
+        changed = True
     for container in containers:
         target = data.get(container)
         if not isinstance(target, dict):

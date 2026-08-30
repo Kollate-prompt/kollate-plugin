@@ -20,7 +20,7 @@ claude plugin marketplace remove kollate >/dev/null 2>&1
 echo "-> Deleting every cached copy and local state"
 rm -rf "$HOME/.claude/plugins/cache/kollate" \
        "$HOME/.claude/plugins/marketplaces/kollate" \
-       "$HOME/.claude/plugins/data/kollate-kollate" \
+       "$HOME"/.claude/plugins/data/*kollate* \
        "$HOME/.kollate" \
        "$HOME/Library/Caches/claude-code" 2>/dev/null
 
@@ -34,6 +34,12 @@ except Exception:
     data = None
 if data:
     touched = False
+    # The status line we install points into ~/.kollate, which this script deletes - leaving
+    # it behind means a permanently broken status line command. Only remove it if it is ours.
+    status = data.get("statusLine")
+    if isinstance(status, dict) and "statusline.py" in str(status.get("command", "")).lower():
+        del data["statusLine"]
+        touched = True
     for section in ("enabledPlugins", "pluginConfigs", "extraKnownMarketplaces"):
         block = data.get(section)
         if isinstance(block, dict):
