@@ -497,8 +497,10 @@ def cmd_update() -> int:
                        if "updated" in line.lower() or "latest" in line.lower()), "").lstrip("\u2714 ").strip()
         if result.returncode == 0:
             print("Terminal registry: " + (detail or "updated"))
-            print("Now quit Claude COMPLETELY, open it again, and start a NEW chat - a resumed "
-                  "session keeps running its old plugin copy.")
+            # Verified on the Windows bench 31.08: an ordinary restart is enough. The old
+            # wording shouted about quitting COMPLETELY and starting a NEW chat, which read
+            # as ceremony and made a working update sound fragile.
+            print("Restart Claude to pick it up.")
             # Menu paths are a trap: claude.ai is mid-rollout on its plugins UI and three
             # accounts showed three different menus the same week, one with no update
             # control at all. The desktop app's own Plugins panel also lags the repository
@@ -518,8 +520,7 @@ def cmd_update() -> int:
     print("Update by reinstalling - it is one paste and keeps your connection: open the "
           "Connect page of your Kollate (Connect > install command), copy the command for "
           "your platform, paste it into PowerShell (Windows) or Terminal (Mac), press "
-          "enter. Then quit Claude completely (Windows: right-click the tray icon by the "
-          "clock > Quit), reopen, and run /kollate:status in a NEW chat.")
+          "enter. Then restart Claude and run /kollate:status.")
     return 1
 
 
@@ -538,14 +539,27 @@ def cmd_status() -> int:
     else:
         lines.append(f"This directory: captured ({cwd})")
     lines.append("Pause state: " + (blocked if blocked else "not paused"))
-    marks = read_json(watermark_path(), {})
-    lines.append(f"Sessions tracked on this desktop: {len(marks)}")
-    try:
-        import datetime
-        stamp = os.path.getmtime(watermark_path())
-        lines.append("Last delivery activity: " + datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S"))
-    except OSError:
+    # The hook and this command do not always resolve plugin_dir() to the same place: Claude
+    # Code sets CLAUDE_PLUGIN_DATA, the desktop app may not. credentials() has always coped by
+    # also looking in ~/.kollate; the watermark did not, so status reported "0 sessions,
+    # delivery never" on a desktop that was capturing perfectly. Seen on the Windows bench
+    # 31.08 with the delivered conversation already sitting in the workspace. Read both.
+    seen, newest = {}, None
+    for directory in {plugin_dir(), shared_dir()}:
+        path = os.path.join(directory, "delivered.json")
+        seen.update(read_json(path, {}) or {})
+        try:
+            stamp = os.path.getmtime(path)
+            newest = stamp if newest is None else max(newest, stamp)
+        except OSError:
+            pass
+    lines.append(f"Sessions tracked on this desktop: {len(seen)}")
+    if newest is None:
         lines.append("Last delivery activity: never")
+    else:
+        import datetime
+        lines.append("Last delivery activity: "
+                     + datetime.datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M:%S"))
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
     if latest:
         lines.append(f"Newest version on the marketplace: {latest}")
