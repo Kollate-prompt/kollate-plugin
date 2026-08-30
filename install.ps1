@@ -44,6 +44,20 @@ if (-not $py) {
   else { Write-Host "Python installed - close this window, open PowerShell again, rerun the same command."; exit 1 }
 }
 
+# The claude CLI may exist without being on PATH - its native installer drops it in
+# ~\.local\bin and tells the person to edit PATH themselves. Hunt before giving up.
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+  foreach ($dir in @("$HOME\.local\bin", "$env:APPDATA\npm")) {
+    if (Test-Path (Join-Path $dir 'claude.exe')) { $env:Path += ";$dir"; break }
+    if (Test-Path (Join-Path $dir 'claude.cmd')) { $env:Path += ";$dir"; break }
+  }
+}
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+  Write-Host "Claude Code is not installed yet. Install it first: irm https://claude.ai/install.ps1 | iex"
+  Write-Host "Then close this window, open PowerShell again, and rerun the same command."
+  exit 1
+}
+
 Write-Host "-> Adding the Kollate marketplace"
 claude plugin marketplace add Kollate-prompt/kollate-plugin 2>$null
 if ($LASTEXITCODE -ne 0) { claude plugin marketplace update kollate 2>$null }
