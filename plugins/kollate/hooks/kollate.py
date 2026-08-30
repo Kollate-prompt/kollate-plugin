@@ -89,6 +89,23 @@ def watermark_path() -> str:
     return os.path.join(plugin_dir(), "delivered.json")
 
 
+def watermark_locations() -> list:
+    """Every delivered.json this machine might hold, found rather than assumed.
+
+    CLAUDE_PLUGIN_DATA is set for hooks but not for the shell a slash command runs in, and its
+    value depends on how the plugin was loaded: the Windows bench 31.08 had BOTH
+    ~/.claude/plugins/data/kollate-kollate/ (marketplace) and .../kollate-inline/ carrying real
+    watermarks, while /kollate:status fell back to ~/.kollate and reported "never delivered" on
+    a desktop that was delivering. Guessing one path is what caused that, so enumerate.
+    """
+    import glob
+    paths = [os.path.join(plugin_dir(), "delivered.json"),
+             os.path.join(shared_dir(), "delivered.json")]
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    paths += glob.glob(os.path.join(config, "plugins", "data", "*kollate*", "delivered.json"))
+    return list(dict.fromkeys(paths))
+
+
 def credentials_path() -> str:
     return os.path.join(plugin_dir(), "credentials.json")
 
@@ -545,8 +562,7 @@ def cmd_status() -> int:
     # delivery never" on a desktop that was capturing perfectly. Seen on the Windows bench
     # 31.08 with the delivered conversation already sitting in the workspace. Read both.
     seen, newest = {}, None
-    for directory in {plugin_dir(), shared_dir()}:
-        path = os.path.join(directory, "delivered.json")
+    for path in watermark_locations():
         seen.update(read_json(path, {}) or {})
         try:
             stamp = os.path.getmtime(path)
