@@ -472,16 +472,21 @@ def cmd_update() -> int:
             print("Terminal registry: " + (detail or "updated"))
             print("Now quit Claude COMPLETELY, open it again, and start a NEW chat - a resumed "
                   "session keeps running its old plugin copy.")
-            print("IMPORTANT on the desktop app: it keeps its OWN plugin registry, separate from "
-                  "the terminal's. Also press Update on Settings > Plugins > Kollate there - "
-                  "otherwise desktop chats keep starting on the old version.")
+            print("IMPORTANT on the desktop app: it keeps its OWN plugin registry, separate "
+                  "from the terminal's. To update IT: open claude.ai in your BROWSER > "
+                  "Settings > Plugins > click the blue 'kollate-plugin' link on the Kollate "
+                  "page > the three dots > Check for updates. (The desktop's own Update "
+                  "button is often greyed out - known desktop-app fault, skip it.)")
             return 0
         print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
     else:
-        print("The claude CLI is not on PATH here.")
-    print("Update by hand: Settings > Plugins > Kollate > Update, then quit Claude completely, "
-          "reopen and start a NEW chat. Or run the install command from the Connect page in a "
-          "terminal.")
+        print("The claude CLI is not reachable from this app.")
+    # The old fallback sent people to the desktop's Update button, which is greyed out on
+    # every affected machine we have seen - a dead end. The browser is the path that works.
+    print("Update from the browser instead: open claude.ai in Chrome > Settings > Plugins > "
+          "on the Kollate page click the blue 'kollate-plugin' link next to Source > three "
+          "dots > Check for updates. Then quit Claude completely (Windows: right-click the "
+          "tray icon by the clock > Quit), reopen, and check the Version field.")
     return 1
 
 
