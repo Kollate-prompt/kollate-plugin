@@ -6,8 +6,8 @@
 param([string]$Url)
 
 $ErrorActionPreference = "Stop"
-if (-not $Url) { Write-Host "Usage: install.ps1 https://your-kollate-address"; exit 2 }
-if ($Url -notmatch '^https://') { Write-Host "The address must start with https:// - got: $Url"; exit 2 }
+if (-not $Url) { Write-Host "Usage: install.ps1 https://your-kollate-address"; return }
+if ($Url -notmatch '^https://') { Write-Host "The address must start with https:// - got: $Url"; return }
 $Url = $Url.TrimEnd('/')
 
 # The claude CLI may exist without being on PATH - its native installer drops it in
@@ -22,7 +22,7 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
   Write-Host "Claude Code is not installed yet. Install it first: irm https://claude.ai/install.ps1 | iex"
   Write-Host "Then close this window, open PowerShell again, and rerun the same command."
-  exit 1
+  return
 }
 
 # Real Python? The Store stub fails on any actual script.
@@ -49,7 +49,7 @@ if (-not $py) {
     Invoke-WebRequest -Uri $pyUrl -OutFile $pyExe
     if ((Get-FileHash $pyExe -Algorithm SHA256).Hash -ne $pyHash) {
       Write-Host "Download integrity check FAILED for Python - stopping. Rerun, and if it repeats, tell your admin."
-      Remove-Item $pyExe -ErrorAction SilentlyContinue; exit 1
+      Remove-Item $pyExe -ErrorAction SilentlyContinue; return
     }
     Start-Process -Wait $pyExe -ArgumentList '/quiet','InstallAllUsers=0','PrependPath=1','Include_launcher=1'
     Remove-Item $pyExe -ErrorAction SilentlyContinue
@@ -58,7 +58,7 @@ if (-not $py) {
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
               [Environment]::GetEnvironmentVariable('Path','User')
   if (Test-Python 'python') { $py = 'python' }
-  else { Write-Host "Python installed - close this window, open PowerShell again, rerun the same command."; exit 1 }
+  else { Write-Host "Python installed - close this window, open PowerShell again, rerun the same command."; return }
 }
 
 # The marketplace add clones with git, which a fresh Windows does not have.
@@ -79,7 +79,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Invoke-WebRequest -Uri $gitUrl -OutFile $gitZip
     if ((Get-FileHash $gitZip -Algorithm SHA256).Hash -ne $gitHash) {
       Write-Host "Download integrity check FAILED for git - stopping. Rerun, and if it repeats, tell your admin."
-      Remove-Item $gitZip -ErrorAction SilentlyContinue; exit 1
+      Remove-Item $gitZip -ErrorAction SilentlyContinue; return
     }
     Expand-Archive -Path $gitZip -DestinationPath $gitDir -Force
     Remove-Item $gitZip -ErrorAction SilentlyContinue
