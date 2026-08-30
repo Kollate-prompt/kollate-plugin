@@ -42,9 +42,15 @@ if (-not $py) {
   } else {
     $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
     $pyUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-$arch.exe"
+    $pyHash = @{ 'arm64' = '377ac8fd478987940088e879441e702a71b53164d2a1e6f1d51ff77a7e470258'
+                 'amd64' = '67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb' }[$arch]
     $pyExe = Join-Path $env:TEMP "python-setup.exe"
     Write-Host "   (no winget here - downloading from python.org)"
     Invoke-WebRequest -Uri $pyUrl -OutFile $pyExe
+    if ((Get-FileHash $pyExe -Algorithm SHA256).Hash -ne $pyHash) {
+      Write-Host "Download integrity check FAILED for Python - stopping. Rerun, and if it repeats, tell your admin."
+      Remove-Item $pyExe -ErrorAction SilentlyContinue; exit 1
+    }
     Start-Process -Wait $pyExe -ArgumentList '/quiet','InstallAllUsers=0','PrependPath=1','Include_launcher=1'
     Remove-Item $pyExe -ErrorAction SilentlyContinue
   }
@@ -53,6 +59,37 @@ if (-not $py) {
               [Environment]::GetEnvironmentVariable('Path','User')
   if (Test-Python 'python') { $py = 'python' }
   else { Write-Host "Python installed - close this window, open PowerShell again, rerun the same command."; exit 1 }
+}
+
+# The marketplace add clones with git, which a fresh Windows does not have.
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+  Write-Host "-> Installing git (one time)"
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
+    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+                [Environment]::GetEnvironmentVariable('Path','User')
+  } else {
+    $garch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { '64-bit' }
+    $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-$garch.zip"
+    $gitHash = @{ 'arm64' = '05843f9d6e60306c3ab886799e2c67200caab921571f10512df3493049179ddb'
+                  '64-bit' = '56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e' }[$garch]
+    $gitZip = Join-Path $env:TEMP 'mingit.zip'
+    $gitDir = Join-Path $env:LOCALAPPDATA 'Programs\MinGit'
+    Write-Host "   (no winget here - downloading MinGit)"
+    Invoke-WebRequest -Uri $gitUrl -OutFile $gitZip
+    if ((Get-FileHash $gitZip -Algorithm SHA256).Hash -ne $gitHash) {
+      Write-Host "Download integrity check FAILED for git - stopping. Rerun, and if it repeats, tell your admin."
+      Remove-Item $gitZip -ErrorAction SilentlyContinue; exit 1
+    }
+    Expand-Archive -Path $gitZip -DestinationPath $gitDir -Force
+    Remove-Item $gitZip -ErrorAction SilentlyContinue
+    $gitBin = Join-Path $gitDir 'cmd'
+    $env:Path += ";$gitBin"
+    $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+    if ($userPath -notlike "*MinGit*") {
+      [Environment]::SetEnvironmentVariable('Path', "$userPath;$gitBin", 'User')
+    }
+  }
 }
 
 Write-Host "-> Adding the Kollate marketplace"
