@@ -224,7 +224,9 @@ def install_statusline() -> str:
             "command": f'python3 "{target}" || python "{target}" || py -3 "{target}"',
         }
         write_json_private(settings_path, settings)
-        return (" The terminal status line now shows recording state "
+        # Only terminal sessions render a status line - the desktop app has no such strip,
+        # and promising a recording light that never appears is worse than promising nothing.
+        return (" In a terminal, the status line now shows recording state "
                 "(remove: statusLine in ~/.claude/settings.json).")
     except Exception:
         return ""
