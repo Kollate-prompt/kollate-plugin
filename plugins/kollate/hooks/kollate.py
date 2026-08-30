@@ -499,11 +499,14 @@ def cmd_update() -> int:
             print("Terminal registry: " + (detail or "updated"))
             print("Now quit Claude COMPLETELY, open it again, and start a NEW chat - a resumed "
                   "session keeps running its old plugin copy.")
-            print("IMPORTANT on the desktop app: it keeps its OWN plugin registry, separate "
-                  "from the terminal's. To update IT: open claude.ai in your BROWSER > "
-                  "Settings > Plugins > click the blue 'kollate-plugin' link on the Kollate "
-                  "page > the three dots > Check for updates. (The desktop's own Update "
-                  "button is often greyed out - known desktop-app fault, skip it.)")
+            # Menu paths are a trap: claude.ai is mid-rollout on its plugins UI and three
+            # accounts showed three different menus the same week, one with no update
+            # control at all. The desktop app's own Plugins panel also lags the repository
+            # by hours. Neither is worth naming; the installer is identical everywhere.
+            print("If the desktop app still shows the old version after restarting, its "
+                  "Plugins panel is reading a stale copy - reinstall from your Kollate "
+                  "Connect page (one paste, keeps your connection) rather than hunting "
+                  "through menus.")
             return 0
         print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
     else:
