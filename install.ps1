@@ -6,6 +6,16 @@
 param([string]$Url)
 
 $ErrorActionPreference = "Stop"
+
+# Claude Code's own installer drops claude.exe in ~\.local\bin and does NOT add it to the
+# user PATH - it prints a note telling the person to do that by hand. So every time this
+# script refreshes PATH from the registry it must add those directories back, or a later
+# refresh silently un-finds the claude we just installed.
+$KollateBins = "$HOME\.local\bin;$env:APPDATA\npm"
+function Sync-Path {
+  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+              [Environment]::GetEnvironmentVariable('Path','User') + ';' + $KollateBins
+}
 if (-not $Url) { Write-Host "Usage: install.ps1 https://your-kollate-address"; return }
 if ($Url -notmatch '^https://') { Write-Host "The address must start with https:// - got: $Url"; return }
 $Url = $Url.TrimEnd('/')
@@ -24,8 +34,7 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
   Write-Host "-> Installing Claude Code (one time)"
   irm https://claude.ai/install.ps1 | iex
-  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-              [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\.local\bin;$env:APPDATA\npm"
+  Sync-Path
 }
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
   Write-Host "Claude Code could not be installed automatically. Get it from https://claude.ai/download,"
@@ -63,8 +72,7 @@ if (-not $py) {
     Remove-Item $pyExe -ErrorAction SilentlyContinue
   }
   # Pick up the new PATH without a new window
-  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-              [Environment]::GetEnvironmentVariable('Path','User')
+  Sync-Path
   if (Test-Python 'python') { $py = 'python' }
   else { Write-Host "Python installed - close this window, open PowerShell again, rerun the same command."; return }
 }
@@ -74,8 +82,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   Write-Host "-> Installing git (one time)"
   if (Get-Command winget -ErrorAction SilentlyContinue) {
     winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
-    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-                [Environment]::GetEnvironmentVariable('Path','User')
+    Sync-Path
   } else {
     $garch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { '64-bit' }
     $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-$garch.zip"
