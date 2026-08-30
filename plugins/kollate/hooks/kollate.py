@@ -488,8 +488,12 @@ def cmd_update() -> int:
     if latest and mine and _version_tuple(latest) <= _version_tuple(mine):
         print(f"{KMARK}Already current: {mine} is the newest version. Nothing to do.")
         return 0
-    print(f"{KMARK}This chat is running: {mine or 'unknown'}")
-    print(f"Newest on the marketplace: {latest or 'could not check'}")
+    # Printing "this chat: X" against "newest: Y" invites whoever reports it to treat a
+    # perfectly normal update as an anomaly - Gal saw a successful run described as
+    # "updated, BUT this chat is still running the old one". Restarting after an update is
+    # ordinary, so the version pair is stated plainly and the restart is a step, not a caveat.
+    print(f"{KMARK}Kollate update")
+    print(f"Installed: {mine or 'unknown'} -> newest available: {latest or 'could not check'}")
     claude_cli = shutil.which("claude")
     if not claude_cli:
         # The desktop app's process often carries a bare PATH, so which() misses a CLI that
@@ -517,15 +521,12 @@ def cmd_update() -> int:
             # Verified on the Windows bench 31.08: an ordinary restart is enough. The old
             # wording shouted about quitting COMPLETELY and starting a NEW chat, which read
             # as ceremony and made a working update sound fragile.
-            print("Restart Claude to pick it up.")
+            print("Restart Claude to finish - until then this chat keeps the copy it "
+                  "started with. That is normal, not a fault.")
             # Menu paths are a trap: claude.ai is mid-rollout on its plugins UI and three
             # accounts showed three different menus the same week, one with no update
             # control at all. The desktop app's own Plugins panel also lags the repository
             # by hours. Neither is worth naming; the installer is identical everywhere.
-            print("If the desktop app still shows the old version after restarting, its "
-                  "Plugins panel is reading a stale copy - reinstall from your Kollate "
-                  "Connect page (one paste, keeps your connection) rather than hunting "
-                  "through menus.")
             return 0
         print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
     else:
