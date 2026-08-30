@@ -23,8 +23,20 @@ foreach ($candidate in @('python', 'python3', 'py')) {
   if (Test-Python $candidate) { $py = $candidate; break }
 }
 if (-not $py) {
-  Write-Host "-> Installing Python (one time, via winget)"
-  winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+  Write-Host "-> Installing Python (one time)"
+  # winget is missing on lean/fresh Windows installs (App Installer not provisioned) -
+  # seen on a clean 24H2 ARM64 bench 30.08. Fall back to python.org directly.
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+  } else {
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+    $pyUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-$arch.exe"
+    $pyExe = Join-Path $env:TEMP "python-setup.exe"
+    Write-Host "   (no winget here - downloading from python.org)"
+    Invoke-WebRequest -Uri $pyUrl -OutFile $pyExe
+    Start-Process -Wait $pyExe -ArgumentList '/quiet','InstallAllUsers=0','PrependPath=1','Include_launcher=1'
+    Remove-Item $pyExe -ErrorAction SilentlyContinue
+  }
   # Pick up the new PATH without a new window
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
               [Environment]::GetEnvironmentVariable('Path','User')
