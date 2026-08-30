@@ -18,7 +18,17 @@ case "$URL" in
   *) echo "The address must start with https:// - got: $URL" >&2; exit 2 ;;
 esac
 
-command -v claude  >/dev/null || { echo "Claude Code is not installed."   >&2; exit 1; }
+# Claude Code itself is a dependency like any other. Refusing here and telling someone to go
+# run a second command is the one step that turns a one-liner back into a support thread.
+if ! command -v claude >/dev/null; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+if ! command -v claude >/dev/null; then
+  echo "→ Installing Claude Code (one time)"
+  curl -fsSL https://claude.ai/install.sh | bash
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+command -v claude  >/dev/null || { echo "Claude Code could not be installed - install it from https://claude.ai/download, then rerun this command." >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required (macOS and Linux ship it)." >&2; exit 1; }
 command -v curl    >/dev/null || { echo "curl is required."               >&2; exit 1; }
 

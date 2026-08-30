@@ -19,9 +19,17 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     }
   }
 }
+# Claude Code itself is a dependency like any other. Refusing here and telling someone to go
+# run a second command is the one step that turns a one-liner back into a support thread.
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-  Write-Host "Claude Code is not installed yet. Install it first: irm https://claude.ai/install.ps1 | iex"
-  Write-Host "Then close this window, open PowerShell again, and rerun the same command."
+  Write-Host "-> Installing Claude Code (one time)"
+  irm https://claude.ai/install.ps1 | iex
+  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+              [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\.local\bin;$env:APPDATA\npm"
+}
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+  Write-Host "Claude Code could not be installed automatically. Get it from https://claude.ai/download,"
+  Write-Host "then open PowerShell again and rerun the same command."
   return
 }
 
