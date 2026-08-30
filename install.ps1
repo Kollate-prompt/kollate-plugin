@@ -10,8 +10,19 @@ if (-not $Url) { Write-Host "Usage: install.ps1 https://your-kollate-address"; e
 if ($Url -notmatch '^https://') { Write-Host "The address must start with https:// - got: $Url"; exit 2 }
 $Url = $Url.TrimEnd('/')
 
+# The claude CLI may exist without being on PATH - its native installer drops it in
+# ~\.local\bin and tells the person to edit PATH themselves. Hunt before giving up.
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-  Write-Host "Claude Code is not installed. Install it first, then rerun this command."; exit 1
+  foreach ($dir in @("$HOME\.local\bin", "$env:APPDATA\npm")) {
+    if ((Test-Path (Join-Path $dir 'claude.exe')) -or (Test-Path (Join-Path $dir 'claude.cmd'))) {
+      $env:Path += ";$dir"; break
+    }
+  }
+}
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+  Write-Host "Claude Code is not installed yet. Install it first: irm https://claude.ai/install.ps1 | iex"
+  Write-Host "Then close this window, open PowerShell again, and rerun the same command."
+  exit 1
 }
 
 # Real Python? The Store stub fails on any actual script.
@@ -42,20 +53,6 @@ if (-not $py) {
               [Environment]::GetEnvironmentVariable('Path','User')
   if (Test-Python 'python') { $py = 'python' }
   else { Write-Host "Python installed - close this window, open PowerShell again, rerun the same command."; exit 1 }
-}
-
-# The claude CLI may exist without being on PATH - its native installer drops it in
-# ~\.local\bin and tells the person to edit PATH themselves. Hunt before giving up.
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-  foreach ($dir in @("$HOME\.local\bin", "$env:APPDATA\npm")) {
-    if (Test-Path (Join-Path $dir 'claude.exe')) { $env:Path += ";$dir"; break }
-    if (Test-Path (Join-Path $dir 'claude.cmd')) { $env:Path += ";$dir"; break }
-  }
-}
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-  Write-Host "Claude Code is not installed yet. Install it first: irm https://claude.ai/install.ps1 | iex"
-  Write-Host "Then close this window, open PowerShell again, and rerun the same command."
-  exit 1
 }
 
 Write-Host "-> Adding the Kollate marketplace"
