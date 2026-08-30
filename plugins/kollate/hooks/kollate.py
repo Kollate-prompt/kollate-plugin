@@ -567,7 +567,20 @@ def enrolled_at() -> float:
     """The moment this machine was connected. Older transcripts are never captured (§2.4)."""
     path = os.path.join(plugin_dir(), "enrolled_at")
     try:
-        return float(open(path, encoding="utf-8").read().strip())
+        stamp = float(open(path, encoding="utf-8").read().strip())
+        # A machine whose clock was wrong when it connected would stamp enrolment in the
+        # future, and then every transcript looks "older than enrolment" and is silently
+        # skipped for good (seen on the Windows bench 30.08, clock 7h fast). A stamp that
+        # cannot be true is corrected rather than obeyed.
+        if stamp > time.time() + 300:
+            stamp = time.time()
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(str(stamp))
+            except OSError:
+                pass
+        return stamp
     except Exception:
         now = time.time()
         os.makedirs(plugin_dir(), mode=0o700, exist_ok=True)
@@ -991,8 +1004,31 @@ def read_event(timeout_seconds: float = 0.5) -> dict:
     """Read the hook payload from stdin, refusing to block the person's turn on it.
 
     `select` rather than a `timeout` command, because `timeout` does not exist on macOS -
-    which is most of the people this runs for.
+    which is most of the people this runs for. On Windows select() accepts ONLY sockets, so
+    handing it stdin raises - and this function used to swallow that and return {}, which
+    made every hook on every Windows machine a silent no-op (found on the Windows bench
+    30.08: connected, zero sessions tracked, nothing ever delivered). There, read on a
+    thread and bound the wait instead.
     """
+    if os.name == "nt":
+        import threading
+
+        holder = {}
+
+        def _read():
+            try:
+                holder["data"] = sys.stdin.read()
+            except Exception:
+                holder["data"] = ""
+
+        reader = threading.Thread(target=_read, daemon=True)
+        reader.start()
+        reader.join(max(timeout_seconds, 3.0))
+        try:
+            return json.loads(holder.get("data") or "{}")
+        except Exception:
+            return {}
+
     import select
 
     try:
