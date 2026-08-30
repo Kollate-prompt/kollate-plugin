@@ -463,6 +463,22 @@ def cmd_update() -> int:
     print(f"{KMARK}This chat is running: {mine or 'unknown'}")
     print(f"Newest on the marketplace: {latest or 'could not check'}")
     claude_cli = shutil.which("claude")
+    if not claude_cli:
+        # The desktop app's process often carries a bare PATH, so which() misses a CLI that
+        # is really there (30.08: a Windows user HAD the CLI - installed 0.4.16 with it -
+        # while /kollate:update claimed it was absent). Check where installers actually put it.
+        home = os.path.expanduser("~")
+        for candidate in (
+            os.path.join(os.environ.get("APPDATA", ""), "npm", "claude.cmd"),
+            os.path.join(home, ".local", "bin", "claude.exe"),
+            os.path.join(home, ".local", "bin", "claude"),
+            os.path.join(home, "AppData", "Roaming", "npm", "claude.cmd"),
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+        ):
+            if candidate and os.path.isfile(candidate):
+                claude_cli = candidate
+                break
     if claude_cli:
         result = subprocess.run([claude_cli, "plugin", "update", "kollate@kollate"],
                                 capture_output=True, text=True, timeout=120)
@@ -481,12 +497,15 @@ def cmd_update() -> int:
         print("The update command failed: " + (result.stderr or result.stdout).strip()[:200])
     else:
         print("The claude CLI is not reachable from this app.")
-    # The old fallback sent people to the desktop's Update button, which is greyed out on
-    # every affected machine we have seen - a dead end. The browser is the path that works.
-    print("Update from the browser instead: open claude.ai in Chrome > Settings > Plugins > "
-          "on the Kollate page click the blue 'kollate-plugin' link next to Source > three "
-          "dots > Check for updates. Then quit Claude completely (Windows: right-click the "
-          "tray icon by the clock > Quit), reopen, and check the Version field.")
+    # No reachable CLI means no lever from inside this chat. Menu instructions are a trap:
+    # claude.ai is mid-rollout on its plugins UI (30.08: three accounts, three different
+    # menus - one had no update control at all), so the only path identical on every
+    # machine is the installer, which runs outside the app and fetches fresh.
+    print("Update by reinstalling - it is one paste and keeps your connection: open the "
+          "Connect page of your Kollate (Connect > install command), copy the command for "
+          "your platform, paste it into PowerShell (Windows) or Terminal (Mac), press "
+          "enter. Then quit Claude completely (Windows: right-click the tray icon by the "
+          "clock > Quit), reopen, and run /kollate:status in a NEW chat.")
     return 1
 
 
