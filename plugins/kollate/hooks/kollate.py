@@ -493,7 +493,7 @@ def cmd_update() -> int:
     # "updated, BUT this chat is still running the old one". Restarting after an update is
     # ordinary, so the version pair is stated plainly and the restart is a step, not a caveat.
     print(f"{KMARK}Kollate update")
-    print(f"Installed: {mine or 'unknown'} -> newest available: {latest or 'could not check'}")
+    print(f"Installed: {mine or 'unknown'} -> newest released: {latest or 'could not check'}")
     claude_cli = shutil.which("claude")
     if not claude_cli:
         # The desktop app's process often carries a bare PATH, so which() misses a CLI that
@@ -579,7 +579,10 @@ def cmd_status() -> int:
                      + datetime.datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M:%S"))
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
     if latest:
-        lines.append(f"Newest version on the marketplace: {latest}")
+        # Not "the marketplace": this number comes from the plugin's own repository, and the
+        # app's catalogue can sit hours behind it. Calling both "the marketplace" is what makes
+        # "I updated and it still says old" unanswerable.
+        lines.append(f"Newest version released: {latest}")
     print("\n".join(lines))
     return 0
 
