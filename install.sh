@@ -48,7 +48,7 @@ run_claude() {
 
 echo "→ Clearing any previous Kollate marketplace"
 python3 - <<'KOLLATE_CLEAN'
-import json, os, platform, shutil, sys, time
+import json, os, platform, shutil, sys, time, urllib.parse
 
 NAME = "kollate"
 home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
@@ -63,14 +63,28 @@ def log(line):
     except Exception:
         pass
 
+def safe_url(raw):
+    """A URL can carry credentials inline (https://user:token@host/path). This log is
+    meant to be pasted into a chat, so drop the userinfo before it is ever written."""
+    try:
+        parts = urllib.parse.urlparse(raw)
+        if not parts.hostname:
+            return "<redacted>" if "@" in raw else raw
+        netloc = parts.hostname + (":%d" % parts.port if parts.port else "")
+        return parts._replace(netloc=netloc).geturl()
+    except Exception:
+        return "<unparseable>"
+
 def redact(value):
-    """A marketplace source may carry auth headers. Never write those to a log
-    the user is going to paste into a chat."""
+    """A marketplace source may carry auth headers, and any URL in it may carry
+    credentials. Never write either to a log the user is going to share."""
     if isinstance(value, dict):
         return {k: ("<redacted>" if k.lower() in ("headers", "token", "authorization")
                     else redact(v)) for k, v in value.items()}
     if isinstance(value, list):
         return [redact(v) for v in value]
+    if isinstance(value, str) and "://" in value:
+        return safe_url(value)
     return value
 
 def load(path):
@@ -126,7 +140,19 @@ if os.path.isdir(clone):
         with open(os.path.join(clone, ".git", "config")) as handle:
             for line in handle:
                 if "url" in line:
-                    log("cached clone remote:%s" % line.rstrip().split("=", 1)[-1])
+                    # A remote can carry credentials inline (https://user:token@host/...).
+                    # This log is meant to be pasted into a chat, so strip userinfo.
+                    raw = line.rstrip().split("=", 1)[-1].strip()
+                    try:
+                        parts = urllib.parse.urlparse(raw)
+                        if parts.hostname:
+                            netloc = parts.hostname + (":%d" % parts.port if parts.port else "")
+                            safe = parts._replace(netloc=netloc).geturl()
+                        else:
+                            safe = raw if "@" not in raw else "<redacted>"
+                    except Exception:
+                        safe = "<unparseable>"
+                    log("cached clone remote: %s" % safe)
     except Exception:
         log("cached clone present, remote unreadable")
     shutil.rmtree(clone, ignore_errors=True)
