@@ -107,15 +107,125 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   }
 }
 
+$KollateLog = Join-Path $HOME ".kollate\install-log.txt"
+New-Item -ItemType Directory -Force -Path (Split-Path $KollateLog) | Out-Null
+# `claude` writes to stderr on failure. With $ErrorActionPreference = "Stop" that is a
+# TERMINATING error, so the script used to abort here and never install anything - the
+# user just saw a red NativeCommandError. Capture the stream instead of dying on it,
+# and log every call with its exit code.
+function Invoke-Claude {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $out = & claude @args 2>&1 | Out-String
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = $prev
+  Add-Content -Path $KollateLog -Value ("$ claude " + ($args -join ' ') + "`n" + $out + "exit=$code")
+  if ($code -ne 0) { Write-Host $out }
+  return $code
+}
+
+Write-Host "-> Clearing any previous Kollate marketplace"
+$cleancode = @'
+import json, os, platform, shutil, sys, time
+
+NAME = "kollate"
+home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+log_path = os.path.join(os.path.expanduser("~/.kollate"), "install-log.txt")
+removed = []
+
+def log(line):
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a") as out:
+            out.write(line + "\n")
+    except Exception:
+        pass
+
+def redact(value):
+    """A marketplace source may carry auth headers. Never write those to a log
+    the user is going to paste into a chat."""
+    if isinstance(value, dict):
+        return {k: ("<redacted>" if k.lower() in ("headers", "token", "authorization")
+                    else redact(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    return value
+
+def load(path):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+def save(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as out:
+        json.dump(data, out, indent=2)
+    os.replace(tmp, path)
+
+log("")
+log("=== kollate install %s ===" % time.strftime("%Y-%m-%d %H:%M:%S"))
+log("os=%s %s  python=%s  config=%s" % (platform.system(), platform.release(),
+                                        platform.python_version(), home))
+
+# Record the declaration we are about to remove, VERBATIM. If the add still fails
+# after this, that record is the only evidence of what shape was actually there -
+# and not knowing that is exactly what has made this hard to diagnose.
+settings_path = os.path.join(home, "settings.json")
+settings = load(settings_path)
+if isinstance(settings, dict):
+    known = settings.get("extraKnownMarketplaces")
+    if isinstance(known, dict) and NAME in known:
+        log("found declaration in settings.json:")
+        log(json.dumps(redact(known[NAME]), indent=2))
+        known.pop(NAME)
+        if not known:
+            settings.pop("extraKnownMarketplaces", None)
+        save(settings_path, settings)
+        removed.append("settings declaration")
+    else:
+        log("no kollate declaration in settings.json")
+else:
+    log("settings.json missing or unreadable")
+
+catalog_path = os.path.join(home, "plugins", "known_marketplaces.json")
+catalog = load(catalog_path)
+if isinstance(catalog, dict) and NAME in catalog:
+    log("found catalog entry:")
+    log(json.dumps(redact(catalog[NAME]), indent=2))
+    catalog.pop(NAME)
+    save(catalog_path, catalog)
+    removed.append("catalog entry")
+
+clone = os.path.join(home, "plugins", "marketplaces", NAME)
+if os.path.isdir(clone):
+    try:
+        with open(os.path.join(clone, ".git", "config")) as handle:
+            for line in handle:
+                if "url" in line:
+                    log("cached clone remote:%s" % line.rstrip().split("=", 1)[-1])
+    except Exception:
+        log("cached clone present, remote unreadable")
+    shutil.rmtree(clone, ignore_errors=True)
+    removed.append("cached copy")
+
+log("cleared: %s" % (", ".join(removed) if removed else "nothing - was already clean"))
+if removed:
+    print("   (cleared a previous Kollate marketplace: " + ", ".join(removed) + ")")
+'@
+$cleancode | & $py -
+
 Write-Host "-> Adding the Kollate marketplace"
-claude plugin marketplace add Kollate-prompt/kollate-plugin 2>$null
-if ($LASTEXITCODE -ne 0) { claude plugin marketplace update kollate 2>$null }
+if ((Invoke-Claude plugin marketplace add Kollate-prompt/kollate-plugin) -ne 0) {
+  Write-Host "The marketplace could not be added. Full detail: $KollateLog"
+  Write-Host "Send that file and this can be diagnosed instead of guessed at."
+  return
+}
 
 Write-Host "-> Installing the plugin"
-claude plugin install kollate 2>$null
-if ($LASTEXITCODE -ne 0) { claude plugin install kollate@kollate 2>$null }
-claude plugin update kollate@kollate 2>$null
-if ($LASTEXITCODE -ne 0) { claude plugin update kollate 2>$null }
+if ((Invoke-Claude plugin install kollate) -ne 0) { $null = Invoke-Claude plugin install kollate@kollate }
+if ((Invoke-Claude plugin update kollate@kollate) -ne 0) { $null = Invoke-Claude plugin update kollate }
 
 Write-Host "-> Pointing it at $Url"
 $env:KOLLATE_URL = $Url
