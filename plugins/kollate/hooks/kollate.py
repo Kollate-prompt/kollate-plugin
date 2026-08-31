@@ -514,6 +514,29 @@ def cmd_update() -> int:
             if candidate and os.path.isfile(candidate):
                 claude_cli = candidate
                 break
+    if not claude_cli:
+        # The desktop app carries its own copy of the CLI inside its bundle, and for a person
+        # who never installed Claude Code separately it is the ONLY one on the machine. Found
+        # on the Windows bench 31.08, where it drove `plugin list` and `plugin update` fine
+        # while /kollate:update was reporting no CLI at all. The version is in the path, so
+        # glob it rather than guessing, and take the newest.
+        import glob
+        roots = [
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages",
+                         "Claude_*", "LocalCache", "Roaming", "Claude", "claude-code",
+                         "*", "claude.exe"),
+            os.path.join(os.environ.get("APPDATA", ""), "Claude", "claude-code", "*", "claude.exe"),
+            os.path.join(home, "Library", "Application Support", "Claude", "claude-code",
+                         "*", "claude.app", "Contents", "MacOS", "claude"),
+            os.path.join(home, "Library", "Application Support", "Claude", "claude-code",
+                         "*", "claude"),
+        ]
+        found = []
+        for pattern in roots:
+            if pattern and "**" not in pattern:
+                found.extend(glob.glob(pattern))
+        if found:
+            claude_cli = sorted(found)[-1]
     if claude_cli:
         result = subprocess.run([claude_cli, "plugin", "update", "kollate@kollate"],
                                 capture_output=True, text=True, timeout=120)
