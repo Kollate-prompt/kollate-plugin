@@ -238,7 +238,10 @@ def install_statusline() -> str:
             return ""
         settings["statusLine"] = {
             "type": "command",
-            "command": f'python3 "{target}" || python "{target}" || py -3 "{target}"',
+            # py -3 first for the same reason as every other probe: the Store python3 alias
+            # can succeed while doing nothing. This one renders on every prompt, so a silent
+            # stub here is a status light that quietly lies.
+            "command": f'py -3 "{target}" || python3 "{target}" || python "{target}"',
         }
         write_json_private(settings_path, settings)
         # Only terminal sessions render a status line - the desktop app has no such strip,
