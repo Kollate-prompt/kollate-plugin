@@ -116,6 +116,20 @@ claude = json.load(open("plugins/kollate/.claude-plugin/plugin.json"))
 check("same plugin", codex["name"], claude["name"])
 check("same version - the update nudge reads one of them", codex["version"], claude["version"])
 
+print("one plugin directory, two tools, no duplicated surface")
+# Codex supplements its own discovery with whatever the manifest names, and it treats a
+# directory called `commands/` as skills - which minted a second, identical copy of all eight
+# under `source-command-*`, eating the skills budget for nothing. Claude Code's `commands`
+# field REPLACES its default scan, so pointing it at a differently-named directory is what
+# lets the two tools share one plugin folder without either seeing the other's surface.
+check("Claude Code is pointed at a directory Codex will not claim",
+      claude.get("commands"), "./claude-commands/")
+check("and there is no commands/ left for Codex to find",
+      os.path.isdir("plugins/kollate/commands"), False)
+verbs = sorted(n[:-3] for n in os.listdir("plugins/kollate/claude-commands"))
+check("both tools offer the same eight",
+      sorted(os.listdir("plugins/kollate/skills")), verbs)
+
 print("end to end, through the real hook")
 received = []
 class Handler(BaseHTTPRequestHandler):
@@ -169,7 +183,14 @@ if received:
     check("named", body.get("title"), "how do I rotate the key?")
     check("and nothing Codex wrote itself",
           any("environment_context" in m["content"] for m in body["messages"]), False)
-    marks = json.load(open(os.path.join(data, "delivered.json")))
+    # The mark is written by the detached child after the POST it just made, so it can land a
+    # moment after the delivery this test is already holding.
+    mark_file = os.path.join(data, "delivered.json")
+    for _ in range(40):
+        if os.path.exists(mark_file):
+            break
+        time.sleep(0.25)
+    marks = json.load(open(mark_file)) if os.path.exists(mark_file) else {}
     check("the mark is namespaced by source",
           list(marks), ["codex:01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee"])
 

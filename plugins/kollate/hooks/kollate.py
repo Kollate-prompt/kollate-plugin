@@ -264,7 +264,9 @@ def command(verb: str) -> str:
     Claude Code has plugin commands; Codex has skills. Printing the wrong one sends somebody
     to a command that does not exist, which reads as "the plugin is broken".
     """
-    return f"kollate-{verb}" if host() == "codex" else f"/kollate:{verb}"
+    # Codex namespaces a plugin's skills with the plugin name, so both tools land on the same
+    # words: /kollate:status there, kollate:status here.
+    return f"kollate:{verb}" if host() == "codex" else f"/kollate:{verb}"
 
 
 def hook_seen_path() -> str:
