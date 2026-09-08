@@ -92,3 +92,31 @@ claude plugin uninstall kollate
 In Claude Code's plugin data directory, readable only by you (`0600`), and it survives plugin
 updates. It is never passed as a command-line argument, where any other user on the machine
 could read it out of the process list.
+
+## Tests
+
+```bash
+./tests/run-all.sh            # everything that needs no database
+./tests/run-all.sh out.log    # and keep the log
+```
+
+| Suite | What it proves |
+|---|---|
+| `endpoint_resolution.sh` | The workspace address resolves in the right order, including on a surface with no settings screen |
+| `claude_capture.sh` | Claude Code: parsing, delivery, watermark, and the things that must never be captured |
+| `codex_capture.sh` | Codex: the same, plus its own record shape, its scaffolding, and the frozen hook command string |
+| `live_transcripts.sh` | The real hook over this machine's own newest transcript from each tool |
+| `hook_budget.sh` | The hook stays off the keystroke path, and its work survives being cut off |
+
+`capture_flow.sh` is not in that runner: it needs a local Supabase and `psql`, so it cannot be the
+thing anybody runs to check a change quickly. Run it separately when the server contract changes.
+
+## Codex
+
+Codex will not run a hook until somebody approves it, and says nothing when it skips one. After
+installing, start Codex, run `/hooks`, and trust Kollate's. `kollate:status` says whether the hooks
+have ever actually run.
+
+**The hook command string in `hooks-codex.json` must never change.** Codex pins hook trust to a hash
+of that exact string: a version bump keeps the trust, an edited command revokes it everywhere at
+once, silently. `codex_capture.sh` freezes it for that reason.
