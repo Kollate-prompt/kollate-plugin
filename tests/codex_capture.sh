@@ -77,11 +77,14 @@ check("and reaches the same end", later_end, end)
 check("Claude Code's marks keep their bare key",
       kollate.watermark_key("abc", "claude_code"), "abc")
 check("Codex's marks are namespaced", kollate.watermark_key("abc", "codex"), "codex:abc")
-kollate.CODEX_SESSIONS_ROOT = os.path.join(home, ".codex", "sessions")
-check("a file in the Codex tree is a Codex session",
+check("a Codex transcript is recognised by what is in it, not where it sits",
       kollate.source_of(transcript), "codex")
-check("anything else is still Claude Code's",
-      kollate.source_of("/tmp/whatever.jsonl"), "claude_code")
+moved = os.path.join(tempfile.mkdtemp(), "somewhere-else.jsonl")
+open(moved, "w").write(FIXTURE)
+check("so it is still a Codex session after somebody moves it",
+      kollate.source_of(moved), "codex")
+check("and a file that says nothing is treated as Claude Code's, as it always was",
+      kollate.source_of("/tmp/does-not-exist.jsonl"), "claude_code")
 
 print("discovery")
 CODE = ("import sys; sys.path.insert(0,'plugins/kollate/hooks'); import kollate, json; "
@@ -193,6 +196,18 @@ if received:
     marks = json.load(open(mark_file)) if os.path.exists(mark_file) else {}
     check("the mark is namespaced by source",
           list(marks), ["codex:01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee"])
+
+print("what a person is told, in this tool")
+fresh = tempfile.mkdtemp()
+out = subprocess.run(
+    [sys.executable, "plugins/kollate/hooks/kollate.py", "status"],
+    env=dict(os.environ, HOME=fresh, CLAUDE_PLUGIN_DATA=os.path.join(fresh, "d"),
+             CLAUDE_PLUGIN_ROOT=os.path.join(fresh, ".codex", "plugins", "cache", "kollate")),
+    capture_output=True, text=True).stdout
+check("the commands named are the ones this tool has", "kollate:connect" in out, True)
+check("and not the other tool's slash form", "/kollate:connect" in out, False)
+check("an unapproved install says so instead of looking healthy",
+      "Codex will not run a hook until you approve it" in out, True)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

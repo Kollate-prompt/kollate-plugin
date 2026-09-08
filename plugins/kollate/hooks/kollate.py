@@ -1080,10 +1080,41 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
 CODEX_SESSIONS_ROOT = "~/.codex/sessions"
 
 
+def codex_sessions_root() -> str:
+    """Where Codex keeps its transcripts. It honours CODEX_HOME, so we do too."""
+    home = os.environ.get("CODEX_HOME")
+    if home:
+        return os.path.join(home, "sessions")
+    return os.path.expanduser(CODEX_SESSIONS_ROOT)
+
+
 def source_of(transcript: str) -> str:
-    """Which tool wrote this transcript."""
-    root = os.path.realpath(os.path.expanduser(CODEX_SESSIONS_ROOT))
-    return "codex" if os.path.realpath(transcript).startswith(root) else "claude_code"
+    """Which tool wrote this transcript, read from the file rather than from where it sits.
+
+    Judging by path looked simpler and was wrong: it depends on HOME resolving the same way in
+    the hook as it did when the file was written, and Codex can be moved with CODEX_HOME. A
+    misread here is not cosmetic - it picks the watermark key, so the same session would be
+    tracked under two different marks and delivered twice.
+    """
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as handle:
+            for _ in range(5):
+                line = handle.readline()
+                if not line:
+                    break
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("type") in ("session_meta", "response_item"):
+                    return "codex"
+                if record.get("type") in ("user", "assistant", "summary", "ai-title"):
+                    return "claude_code"
+    except OSError:
+        pass
+    return "claude_code"
 
 
 def watermark_key(session_id: str, source: str) -> str:
@@ -1106,7 +1137,7 @@ def session_files():
         for name in files:
             if name.endswith(".jsonl"):
                 yield os.path.join(directory, name), name[:-6], "claude_code"
-    for directory, _subdirs, files in os.walk(os.path.expanduser(CODEX_SESSIONS_ROOT)):
+    for directory, _subdirs, files in os.walk(codex_sessions_root()):
         for name in files:
             # rollout-<iso timestamp>-<uuid>.jsonl - the uuid tail is the session id, and it
             # equals session_meta's own id, so there is nothing to open to learn it.
