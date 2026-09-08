@@ -1,0 +1,17 @@
+{
+  "name": "kollate",
+  "version": "0.4.44",
+  "description": "Capture your Codex conversations into your organisation's Kollate workspace",
+  "author": {
+    "name": "Kollate"
+  },
+  "repository": "https://github.com/Kollate-prompt/kollate-plugin",
+  "hooks": "./hooks/hooks-codex.json",
+  "interface": {
+    "displayName": "Kollate",
+    "shortDescription": "Your conversations become your organisation's memory",
+    "capabilities": [
+      "Write"
+    ]
+  }
+}

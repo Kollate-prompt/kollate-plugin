@@ -400,7 +400,9 @@ def transcript_cwd(path: str) -> str:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                value = record.get("cwd")
+                # Claude Code puts cwd on every record; Codex puts it once, inside the
+                # session_meta payload.
+                value = record.get("cwd") or (record.get("payload") or {}).get("cwd")
                 if value:
                     return str(value)
     except OSError:
@@ -666,9 +668,61 @@ def _flatten(content) -> str:
         return ""
     parts = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
+        # "text" is Claude Code's block; Codex writes "input_text" on the way in and
+        # "output_text" on the way out. Everything else - thinking, tool calls, images - is
+        # still dropped here, which is the rule, not an oversight.
+        if isinstance(block, dict) and block.get("type") in ("text", "input_text", "output_text"):
             parts.append(block.get("text", ""))
     return "\n".join(part for part in parts if part)
+
+
+def _codex_scaffolding(content) -> bool:
+    """Was this "user" message written by Codex rather than by a person?
+
+    Codex feeds the model its own context - <environment_context>, <recommended_plugins>,
+    <user_instructions> - as user turns. Stored, they open conversations with a wall of
+    machine text and steal the title from the real first question.
+
+    They are recognisable without an allowlist: the whole message is one XML-ish element,
+    opening tag first and closing tag last. A list of known tag names would need editing every
+    time Codex adds one, and would fail silently until somebody noticed.
+
+    ponytail: a person who pastes a bare `<div>…</div>` and nothing else loses that turn.
+    Narrow the rule to a tag allowlist if that ever actually happens.
+    """
+    text = _flatten(content).strip()
+    if not (text.startswith("<") and text.endswith(">")):
+        return False
+    opening = text[1:text.find(">")] if ">" in text else ""
+    closing = text[text.rfind("</") + 2:-1] if "</" in text else ""
+    return bool(opening) and bool(closing) and opening.replace("_", "").isalnum() \
+        and closing.replace("_", "").isalnum()
+
+
+def _as_turn(record: dict) -> dict:
+    """Codex's record shape, translated into Claude Code's.
+
+    Codex wraps every turn as `{type:"response_item", payload:{type:"message", role, content}}`
+    where Claude Code writes `{type:"user", message:{role, content}}`. Normalising here rather
+    than forking the parser means the offset handling, the torn-tail rule, the title fallback
+    and the batching all keep exactly one implementation.
+    """
+    if record.get("type") != "response_item":
+        return record
+    payload = record.get("payload") or {}
+    if payload.get("type") != "message":
+        return {}  # reasoning, tool calls, session_meta - noise, same as Claude Code's
+    role = payload.get("role")
+    if role == "user" and _codex_scaffolding(payload.get("content")):
+        return {}
+    return {
+        "type": role,
+        "message": {"role": role, "content": payload.get("content")},
+        # Codex has no per-message uuid. It does number every record, which is the same thing
+        # for our purposes: stable, unique inside the session, and already written down.
+        "uuid": f"{record.get('ordinal')}" if record.get("ordinal") is not None else None,
+        "timestamp": record.get("timestamp"),
+    }
 
 
 def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | None, bool]:
@@ -710,6 +764,8 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
             # A complete but unparseable line. Skip it and keep going: refusing to advance
             # would stall this session's capture permanently, and silently, on one bad line.
             continue
+
+        record = _as_turn(record)
 
         # `/rename` writes `custom-title`; Claude's own naming writes `ai-title`. They are not
         # interchangeable - one is a person's decision and must not be undone by the other on
@@ -840,7 +896,7 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
             pass
 
 
-def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
+def advance_watermark(key: str, offset: int, next_seq: int) -> None:
     """Move the mark forward, never backward, under a lock.
 
     Two hooks can be in flight at once - a slow delivery and the next turn's fast one. Without
@@ -876,10 +932,10 @@ def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
     try:
         _lock(lock_fd)
         marks = read_json(path, {})
-        current = marks.get(session_id) or {"offset": 0, "next_seq": 0}
+        current = marks.get(key) or {"offset": 0, "next_seq": 0}
         if offset <= int(current.get("offset", 0)):
             return  # somebody else already got further; leave their mark alone
-        marks[session_id] = {"offset": offset, "next_seq": next_seq}
+        marks[key] = {"offset": offset, "next_seq": next_seq}
         write_json_private(path, marks)
     finally:
         _unlock(lock_fd)
@@ -922,7 +978,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     cutoff = enrolled_at()
     try:
         if first_run and not ignore_enrolment:
-            advance_watermark(session_id, os.path.getsize(transcript), 0)
+            advance_watermark(watermark_key(session_id, source_of(transcript)),
+                              os.path.getsize(transcript), 0)
             return
         if os.path.getmtime(transcript) < cutoff and not ignore_enrolment:
             return  # older than enrolment - never ours to take (§2.4)
@@ -937,7 +994,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
 
     sweep_stale_files()
 
-    mark = read_json(watermark_path(), {}).get(session_id) or {"offset": 0, "next_seq": 0}
+    key = watermark_key(session_id, source_of(transcript))
+    mark = read_json(watermark_path(), {}).get(key) or {"offset": 0, "next_seq": 0}
     turns, _end, title, title_chosen = turns_from(transcript, int(mark.get("offset", 0)))
     if not turns:
         return
@@ -947,7 +1005,7 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         blocked = "directory opted out"
     if blocked:
         # Advance the watermark over the delta without sending it, so it is gone for good.
-        advance_watermark(session_id, _end, int(mark.get("next_seq", 0)))
+        advance_watermark(key, _end, int(mark.get("next_seq", 0)))
         return
 
     seq = int(mark.get("next_seq", 0))
@@ -962,12 +1020,68 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         seq = batch[-1]["seq"] + 1
         # Only as far as THIS batch reached. Advancing to the end of the whole delta here
         # would skip the turns in a batch that has not been sent yet.
-        advance_watermark(session_id, batch_end, seq)
+        advance_watermark(key, batch_end, seq)
+
+
+CODEX_SESSIONS_ROOT = "~/.codex/sessions"
+
+
+def source_of(transcript: str) -> str:
+    """Which tool wrote this transcript."""
+    root = os.path.realpath(os.path.expanduser(CODEX_SESSIONS_ROOT))
+    return "codex" if os.path.realpath(transcript).startswith(root) else "claude_code"
+
+
+def watermark_key(session_id: str, source: str) -> str:
+    """The mark's key. Session ids are only unique WITHIN a tool.
+
+    Claude Code's marks were written before any other source existed, so its key stays bare -
+    prefixing it would orphan every watermark on every machine already running, and orphaned
+    marks mean re-sending whole transcripts from offset zero.
+    """
+    return session_id if source == "claude_code" else f"{source}:{session_id}"
+
+
+def session_files():
+    """Every conversation transcript on this machine: (path, session_id, source)."""
+    for directory, subdirs, files in os.walk(os.path.expanduser("~/.claude/projects")):
+        # A subagent transcript is machinery inside somebody's session, not a conversation they
+        # had - capturing it mints a phantom conversation whose first line is an agent prompt.
+        # Nothing hooks SubagentStop either, so this scan was the only way they ever got in.
+        subdirs[:] = [d for d in subdirs if d != "subagents"]
+        for name in files:
+            if name.endswith(".jsonl"):
+                yield os.path.join(directory, name), name[:-6], "claude_code"
+    for directory, _subdirs, files in os.walk(os.path.expanduser(CODEX_SESSIONS_ROOT)):
+        for name in files:
+            # rollout-<iso timestamp>-<uuid>.jsonl - the uuid tail is the session id, and it
+            # equals session_meta's own id, so there is nothing to open to learn it.
+            if name.startswith("rollout-") and name.endswith(".jsonl") and len(name) > 42:
+                yield os.path.join(directory, name), name[:-6][-36:], "codex"
 
 
 def _project_slug(path: str) -> str:
     """The directory name Claude Code gives a working directory under ~/.claude/projects."""
     return "".join(ch if ch.isalnum() else "-" for ch in os.path.realpath(path))
+
+
+def _here(path: str, source: str) -> bool:
+    """Did this session run in the directory the person is standing in (or under it)?
+
+    Claude Code answers this from the folder name it files the transcript under. Codex files
+    everything in one flat date tree, so the only record of where a session ran is inside the
+    file - which is why this costs a read there and nothing here.
+    """
+    if source == "claude_code":
+        slug = _project_slug(os.getcwd())
+        base = os.path.basename(os.path.dirname(path))
+        return base == slug or base.startswith(slug + "-")
+    where = transcript_cwd(path)
+    if not where:
+        return False
+    here = os.path.realpath(os.getcwd())
+    where = os.path.realpath(where)
+    return where == here or where.startswith(here + os.sep)
 
 
 def backfill(limit: int, scope: str = "dir") -> int:
@@ -988,25 +1102,19 @@ def backfill(limit: int, scope: str = "dir") -> int:
     # The default reaches back only into THIS directory's history (and its subdirectories) -
     # per the client 28.08: whole-machine history is a bigger grab than anyone expects from a
     # command they run inside one project. /kollate:backfill all is the deliberate wide net.
-    here = _project_slug(os.getcwd())
     candidates = []
-    for directory, _subdirs, files in os.walk(os.path.expanduser("~/.claude/projects")):
-        base = os.path.basename(directory)
-        if scope != "all" and not (base == here or base.startswith(here + "-")):
+    for path, session_id, source in session_files():
+        if scope != "all" and not _here(path, source):
             continue
-        for name in files:
-            if not name.endswith(".jsonl"):
+        try:
+            if os.path.getmtime(path) >= cutoff:
+                continue  # not history - the ordinary capture path already has it
+            mark = (marks.get(watermark_key(session_id, source)) or {}).get("offset", 0)
+            if os.path.getsize(path) <= int(mark):
                 continue
-            path = os.path.join(directory, name)
-            session_id = name[:-6]
-            try:
-                if os.path.getmtime(path) >= cutoff:
-                    continue  # not history - the ordinary capture path already has it
-                if os.path.getsize(path) <= int((marks.get(session_id) or {}).get("offset", 0)):
-                    continue
-            except OSError:
-                continue
-            candidates.append((os.path.getmtime(path), path, session_id))
+        except OSError:
+            continue
+        candidates.append((os.path.getmtime(path), path, session_id))
 
     candidates.sort(reverse=True)  # most recent history first - the useful end of it
     selected = candidates[:limit]
@@ -1039,27 +1147,18 @@ def reconcile(live_session_id: str) -> None:
         return
     marks = read_json(watermark_path(), {})
     cutoff = enrolled_at()
-    root = os.path.expanduser("~/.claude/projects")
-    for directory, subdirs, files in os.walk(root):
-        # A subagent transcript is machinery inside somebody's session, not a conversation they
-        # had - capturing it mints a phantom conversation whose first line is an agent prompt.
-        # Nothing hooks SubagentStop either, so this scan was the only way they ever got in.
-        subdirs[:] = [d for d in subdirs if d != "subagents"]
-        for name in files:
-            if not name.endswith(".jsonl"):
-                continue
-            session_id = name[:-6]
-            if session_id == live_session_id:
-                continue  # the running session belongs to the Stop hook
-            path = os.path.join(directory, name)
-            try:
-                if os.path.getmtime(path) < cutoff:
-                    continue  # older than enrolment - never ours to take (§2.4)
-                if os.path.getsize(path) <= int((marks.get(session_id) or {}).get("offset", 0)):
-                    continue  # nothing new since the last confirmed delivery
-            except OSError:
-                continue
-            capture_session(path, session_id)
+    for path, session_id, source in session_files():
+        if session_id == live_session_id:
+            continue  # the running session belongs to the Stop hook
+        key = watermark_key(session_id, source)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue  # older than enrolment - never ours to take (§2.4)
+            if os.path.getsize(path) <= int((marks.get(key) or {}).get("offset", 0)):
+                continue  # nothing new since the last confirmed delivery
+        except OSError:
+            continue
+        capture_session(path, session_id)
 
 
 # ----------------------------------------------------------------------------------- main

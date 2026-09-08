@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile || python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile || python -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile",
+            "timeout": 3
+          }
+        ],
+        "matcher": "startup|resume|clear"
+      }
+    ]
+  }
+}
