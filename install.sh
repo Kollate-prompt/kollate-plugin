@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Kollate for Claude Code - one command.
+# Kollate for Claude Code and Codex - one command.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/install.sh | bash -s -- https://your-kollate-address
 #
@@ -20,15 +20,24 @@ esac
 
 # Claude Code itself is a dependency like any other. Refusing here and telling someone to go
 # run a second command is the one step that turns a one-liner back into a support thread.
-if ! command -v claude >/dev/null; then
+#
+# Unless they are here for Codex. Someone who already runs Codex and not Claude Code should
+# not have a second agent installed on their machine as a side effect of capturing the one
+# they do use, so the bootstrap only fires when neither is present.
+if ! command -v claude >/dev/null || ! command -v codex >/dev/null; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
-if ! command -v claude >/dev/null; then
+if ! command -v claude >/dev/null && ! command -v codex >/dev/null; then
   echo "→ Installing Claude Code (one time)"
   curl -fsSL https://claude.ai/install.sh | bash
   export PATH="$HOME/.local/bin:$PATH"
 fi
-command -v claude  >/dev/null || { echo "Claude Code could not be installed - install it from https://claude.ai/download, then rerun this command." >&2; exit 1; }
+if ! command -v claude >/dev/null && ! command -v codex >/dev/null; then
+  echo "Neither Claude Code nor Codex is installed, and Claude Code could not be installed" >&2
+  echo "automatically. Install one from https://claude.ai/download or with" >&2
+  echo "'npm i -g @openai/codex', then rerun this command." >&2
+  exit 1
+fi
 command -v python3 >/dev/null || { echo "python3 is required (macOS and Linux ship it)." >&2; exit 1; }
 command -v curl    >/dev/null || { echo "curl is required."               >&2; exit 1; }
 
@@ -46,6 +55,7 @@ run_claude() {
   return $rc
 }
 
+if command -v claude >/dev/null; then
 echo "→ Clearing any previous Kollate marketplace"
 python3 - <<'KOLLATE_CLEAN'
 import json, os, platform, shutil, sys, time, urllib.parse
@@ -178,7 +188,7 @@ run_claude claude plugin install kollate || run_claude claude plugin install kol
 claude plugin update kollate@kollate >/dev/null 2>&1 || claude plugin update kollate >/dev/null 2>&1 || true
 
 echo "→ Pointing it at $URL"
-KOLLATE_URL="$URL" python3 - <<'PY'
+KOLLATE_URL="$URL" python3 - <<'KOLLATE_SETTINGS'
 import json, os
 
 path = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
@@ -197,7 +207,6 @@ options["endpoint"] = os.environ["KOLLATE_URL"].rstrip("/")
 settings.setdefault("enabledPlugins", {})["kollate@kollate"] = True
 
 os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-
 # Keep whatever permissions the file already had; create a new one owner-only. This file can
 # carry hook commands and permission rules, so it must not become group- or world-writable.
 try:
@@ -211,10 +220,17 @@ with os.fdopen(handle, "w") as out:
     json.dump(settings, out, indent=2)
 os.chmod(tmp, mode)
 os.replace(tmp, path)
+KOLLATE_SETTINGS
+
+fi  # end of the Claude Code half
 
 # The desktop app loads the plugin but has no userConfig screen - its plugin page offers only
-# Skills and Hooks - so the setting above is invisible there. The same address goes to a file
-# both surfaces read, which is what lets one install cover the terminal and the app.
+# Skills and Hooks - so the setting above is invisible there. Codex has no userConfig screen
+# at all. The same address goes to a file every surface reads, which is what lets one install
+# cover the terminal, the app and Codex.
+KOLLATE_URL="$URL" python3 - <<'KOLLATE_SHARED'
+import json, os
+
 shared = os.path.expanduser("~/.kollate")
 os.makedirs(shared, mode=0o700, exist_ok=True)
 config = os.path.join(shared, "config.json")
@@ -223,13 +239,31 @@ handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(handle, "w") as out:
     json.dump({"endpoint": os.environ["KOLLATE_URL"].rstrip("/")}, out)
 os.replace(tmp, config)
-PY
+KOLLATE_SHARED
 
+# ------------------------------------------------------------------------------------ Codex
+# Codex has its own marketplace, its own plugin store and its own copy of the manifests in
+# this same repository, so this is two commands rather than surgery on anybody's hooks.json.
+CODEX_INSTALLED=""
+if command -v codex >/dev/null; then
+  echo "→ Codex found - installing there too"
+  # Adding a marketplace that is already configured is not an error worth stopping for.
+  codex plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin >>"$KOLLATE_LOG" 2>&1 || true
+  codex plugin marketplace upgrade kollate >>"$KOLLATE_LOG" 2>&1 || true
+  if codex plugin add kollate@kollate >>"$KOLLATE_LOG" 2>&1; then
+    CODEX_INSTALLED="yes"
+  else
+    echo "   Codex is installed but the plugin could not be added. Detail: $KOLLATE_LOG" >&2
+  fi
+fi
+
+echo
+echo "  Installed."
+
+if command -v claude >/dev/null; then
 cat <<DONE
 
-  Installed.
-
-  Two things left, and they are both yours:
+  In Claude Code, two things left, and they are both yours:
 
     1. Quit Claude Code completely and open it again.
        Plugins load at startup - a session already running will not see this one.
@@ -240,3 +274,19 @@ cat <<DONE
   connected. You are never shown a key and never edit a file.
 
 DONE
+fi
+
+if [ -n "$CODEX_INSTALLED" ]; then
+cat <<CODEX_DONE
+  In Codex there is one extra step, and nothing is captured until you do it:
+
+    1. Start Codex. It will say some hooks need review.
+    2. Trust Kollate's. (Or run /hooks at any time and trust them there.)
+    3. Then:  kollate-connect
+
+  Codex will not run a hook it has not been shown, and it says nothing when it skips one -
+  so an unapproved install looks exactly like a working one. kollate-status will tell you
+  whether the hooks have ever actually run.
+
+CODEX_DONE
+fi

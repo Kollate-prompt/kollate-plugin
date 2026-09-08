@@ -252,6 +252,41 @@ def install_statusline() -> str:
         return ""
 
 
+def host() -> str:
+    """Which tool loaded this copy of the plugin. Read from where it was installed from."""
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    return "codex" if os.path.join(".codex", "plugins") in root else "claude_code"
+
+
+def command(verb: str) -> str:
+    """How a person invokes one of our commands, in the tool they are actually in.
+
+    Claude Code has plugin commands; Codex has skills. Printing the wrong one sends somebody
+    to a command that does not exist, which reads as "the plugin is broken".
+    """
+    return f"kollate-{verb}" if host() == "codex" else f"/kollate:{verb}"
+
+
+def hook_seen_path() -> str:
+    return os.path.join(plugin_dir(), "hook-seen")
+
+
+def note_hook_ran() -> None:
+    """Leave a mark that a hook actually ran.
+
+    Codex will not run a hook until somebody approves it in its own interface, and it says
+    nothing at all when it skips one - no prompt, no error, no line in the session. Without
+    this heartbeat, "installed, enabled, and capturing nothing" and "working" look identical
+    from the outside, which is exactly the week that Windows cost us once already.
+    """
+    try:
+        os.makedirs(plugin_dir(), mode=0o700, exist_ok=True)
+        with open(hook_seen_path(), "w") as handle:
+            handle.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
 def pause_path() -> str:
     # Shared, deliberately: pausing from the terminal must also pause the desktop app.
     return os.path.join(shared_dir(), "pause.json")
@@ -318,7 +353,7 @@ def update_nudge() -> str:
             pass
         # Calm one-liner by the client's request (28.08) - the old yellow block read as an
         # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
-        return ("\n" + KMARK + "Run /kollate:update and relaunch Claude: version " + latest)
+        return ("\n" + KMARK + f"Run {command('update')} and relaunch Claude: version " + latest)
     return ""
 
 
@@ -380,11 +415,11 @@ def cmd_record() -> int:
     mark_dir(cwd, excluded=False, approved=True)
     print(f"{KMARK}Recording ON for {cwd} (and its subdirectories) - any earlier opt-out here is "
           "lifted. Only turns from this moment on are captured. "
-          "Opt out again any time with /kollate:pause dir.")
+          f"Opt out again any time with {command('pause')} dir.")
     blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
     if blocked:
         print(f"WARNING: {blocked} machine-wide, so NOTHING is captured despite the above - "
-              "run /kollate:resume first.")
+              f"run {command('resume')} first.")
     return 0
 
 
@@ -437,7 +472,7 @@ def cmd_pause(scope: str) -> int:
     if scope in ("session", "this session", "this"):
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
         if not sid:
-            print(KMARK + "Could not tell which session this is. Use a duration instead: /kollate:pause 3h")
+            print(KMARK + f"Could not tell which session this is. Use a duration instead: {command('pause')} 3h")
             return 1
         sessions = set(state.get("sessions") or [])
         sessions.add(sid)
@@ -456,16 +491,16 @@ def cmd_pause(scope: str) -> int:
         message = "Capture paused for a week."
     elif scope in ("stop", "forever", "off"):
         state["until"] = None
-        message = "Capture stopped on this machine. /kollate:resume turns it back on."
+        message = f"Capture stopped on this machine. {command('resume')} turns it back on."
     elif scope in ("dir", "directory", "this directory", "here"):
         cwd = os.getcwd()
         mark_dir(cwd, excluded=True)
         print(f"{KMARK}Opted out: sessions in {cwd} (and its subdirectories) are not captured to "
               "Kollate. Everything already sent stays; nothing new leaves this directory. "
-              "Re-include it by running /kollate:resume here.")
+              f"Re-include it by running {command('resume')} here.")
         return 0
     else:
-        print(KMARK + "Pause what? One of: session · 3h · today · week · dir (this directory)   (or /kollate:stop)")
+        print(KMARK + f"Pause what? One of: session · 3h · today · week · dir (this directory)   (or {command('stop')})")
         return 1
     write_json_private(pause_path(), state)
     print(message + " Paused turns are dropped, not queued - they will not arrive later.")
@@ -566,7 +601,7 @@ def cmd_update() -> int:
     print("Update by reinstalling - it is one paste and keeps your connection: open the "
           "Connect page of your Kollate (Connect > install command), copy the command for "
           "your platform, paste it into PowerShell (Windows) or Terminal (Mac), press "
-          "enter. Then restart Claude and run /kollate:status.")
+          f"enter. Then restart Claude and run {command('status')}.")
     return 1
 
 
@@ -577,11 +612,11 @@ def cmd_status() -> int:
     connected = bool(creds.get("capture_token") and creds.get("api_base"))
     lines = [f"{KMARK}Kollate plugin {version}"]
     lines.append(f"Endpoint: {creds.get('endpoint') or '(none)'}")
-    lines.append("Connected: " + ("yes" if connected else "NO - run /kollate:connect"))
+    lines.append("Connected: " + ("yes" if connected else f"NO - run {command('connect')}"))
     blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
     cwd = os.getcwd()
     if dir_excluded(cwd):
-        lines.append(f"This directory: OPTED OUT ({cwd}) - /kollate:resume here re-includes it")
+        lines.append(f"This directory: OPTED OUT ({cwd}) - {command('resume')} here re-includes it")
     else:
         lines.append(f"This directory: captured ({cwd})")
     lines.append("Pause state: " + (blocked if blocked else "not paused"))
@@ -599,6 +634,23 @@ def cmd_status() -> int:
         except OSError:
             pass
     lines.append(f"Sessions tracked on this desktop: {len(seen)}")
+    stamp = 0
+    for directory in (plugin_dir(), shared_dir()):
+        try:
+            with open(os.path.join(directory, "hook-seen")) as handle:
+                stamp = max(stamp, int(handle.read().strip() or 0))
+        except (OSError, ValueError):
+            pass
+    if stamp:
+        import datetime
+        lines.append("Hooks last ran: "
+                     + datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S"))
+    elif host() == "codex":
+        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you approve it. Start "
+                     "Codex, run /hooks, and trust Kollate's. Nothing is captured until you do.")
+    else:
+        lines.append("Hooks: never run - restart your session; if it persists, reinstall.")
+
     if newest is None:
         lines.append("Last delivery activity: never")
     else:
@@ -1094,7 +1146,7 @@ def backfill(limit: int, scope: str = "dir") -> int:
     """
     creds = credentials()
     if not creds["capture_token"]:
-        print(KMARK + "This machine is not connected. Run /kollate:connect first.")
+        print(KMARK + f"This machine is not connected. Run {command('connect')} first.")
         return 1
 
     cutoff = enrolled_at()
@@ -1121,7 +1173,7 @@ def backfill(limit: int, scope: str = "dir") -> int:
     if not selected:
         where = "this machine" if scope == "all" else "this directory"
         print(KMARK + f"No conversations in {where} from before this machine was connected."
-              + ("" if scope == "all" else " (/kollate:backfill all searches the whole machine.)"))
+              + ("" if scope == "all" else f" ({command('backfill')} all searches the whole machine.)"))
         return 0
 
     where = "this machine" if scope == "all" else "this directory"
@@ -1242,6 +1294,7 @@ def main() -> int:
     command = sys.argv[1] if len(sys.argv) > 1 else "capture"
 
     if command == "capture":
+        note_hook_ran()
         event = read_event()
         transcript = event.get("transcript_path") or event.get("transcriptPath") or ""
         session_id = event.get("session_id") or event.get("sessionId") or ""
@@ -1270,6 +1323,7 @@ def main() -> int:
         return 0
 
     if command == "reconcile":
+        note_hook_ran()
         event = read_event()
         live = event.get("session_id") or event.get("sessionId") or ""
         # Say out loud that capture is on, once per session - not on compaction, which would
@@ -1284,7 +1338,7 @@ def main() -> int:
                 RED, DIM, RST = "\033[31m", "\033[2m", "\033[0m"
                 print(json.dumps({"systemMessage":
                     f"{RED}\u2715{RST} {DIM}Kollate is not recording - this machine is not "
-                    f"connected. {RST}{RED}/kollate:connect{RST}{DIM} sets it up.{RST}",
+                    f"connected. {RST}{RED}{command('connect')}{RST}{DIM} sets it up.{RST}",
                     "suppressOutput": True}))
             if creds["capture_token"] and creds["endpoint"]:
                 cwd = event.get("cwd") or ""
@@ -1302,7 +1356,7 @@ def main() -> int:
                 if blocked:
                     YMARK = f"{YEL}\u2715{RST}"
                     text = (f"{YMARK} {YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
-                            f"{DIM}/kollate:resume turns capture back on.{RST}")
+                            f"{DIM}{command('resume')} turns capture back on.{RST}")
                 elif cwd and not dir_seen(cwd):
                     # First session ever in this directory: the loud version. Consent is
                     # only real if the first encounter cannot be missed.
@@ -1313,13 +1367,13 @@ def main() -> int:
                             "Captured: your messages and Claude's replies. Never captured: "
                             "thinking, tool output, file contents. "
                             f"{YEL}To keep THIS working directory out of Kollate, run "
-                            f"/kollate:pause and choose 'this directory'.{RST} "
+                            f"{command('pause')} and choose 'this directory'.{RST} "
                             f"{DIM}This full notice is shown once per directory; later sessions "
                             f"get one quiet line.{RST}")
                     mark_dir(cwd)
                 else:
                     text = (f"{MARK} {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
-                            f"· opt out: /kollate:pause{RST}")
+                            f"· opt out: {command('pause')}{RST}")
                 print(json.dumps({"systemMessage": text + update_nudge(), "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
@@ -1436,7 +1490,7 @@ _CONNECTED_EXTRA = """<ul>
   __BUTTON__
   <p class="close">You can close this tab - Claude Code is finishing up.</p>"""
 
-_FAILED_EXTRA = """<p class="close">Close this tab and run /kollate:connect again.</p>"""
+_FAILED_EXTRA = """<p class="closef">Close this tab and run {command('connect')} again.</p>"""
 
 
 def done_page(ok: bool, endpoint: str = "") -> str:
@@ -1571,7 +1625,7 @@ def connect() -> int:
         blocked = capture_blocked("")
         if blocked:
             message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
-                        "run /kollate:resume to actually start.")
+                        f"run {command('resume')} to actually start.")
         return True, message + install_statusline()
 
     class Handler(http.server.BaseHTTPRequestHandler):

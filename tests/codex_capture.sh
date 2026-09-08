@@ -91,6 +91,31 @@ found = json.loads(subprocess.run([sys.executable, "-c", CODE], env=dict(os.envi
 check("the Codex tree is scanned",
       found, [["01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee", "codex"]])
 
+print("the hook command string is frozen")
+# Codex pins its hook trust to a hash of this string. Changing it revokes the trust every
+# installed machine has already granted - silently: no prompt, no error, the hook simply
+# stops running and capture stops with it (measured 2026-09-07). If this test fails, the
+# change is not a refactor, it is a release note and a re-approval for every user.
+FROZEN = {
+    "stop": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
+    "session_end": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
+    "session_start": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile || python3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile || python -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile',
+}
+manifest = json.load(open("plugins/kollate/hooks/hooks-codex.json"))["hooks"]
+for event, want in (("Stop", "stop"), ("SessionEnd", "session_end"), ("SessionStart", "session_start")):
+    got = manifest[event][0]["hooks"][0]["command"]
+    check(f"{event} still runs exactly what Codex trusted", got, FROZEN[want])
+check("SessionStart only fires for a real session start",
+      manifest["SessionStart"][0].get("matcher"), "startup|resume|clear")
+check("every hook declares the timeout Codex would clamp it to anyway",
+      sorted({g[0]["timeout"] for e in manifest.values() for g in [e[0]["hooks"]]}), [3])
+
+print("the two manifests agree")
+codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))
+claude = json.load(open("plugins/kollate/.claude-plugin/plugin.json"))
+check("same plugin", codex["name"], claude["name"])
+check("same version - the update nudge reads one of them", codex["version"], claude["version"])
+
 print("end to end, through the real hook")
 received = []
 class Handler(BaseHTTPRequestHandler):
@@ -120,8 +145,10 @@ env.pop("CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN", None)
 event = json.dumps({"session_id": "01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee",
                     "transcript_path": transcript, "cwd": "/tmp/somewhere",
                     "hook_event_name": "SessionEnd", "reason": "other"})
-subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "capture"],
-               input=event, text=True, env=env, capture_output=True, timeout=30)
+ran = subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "capture"],
+                     input=event, text=True, env=env, capture_output=True, timeout=30)
+if ran.stderr.strip():
+    print("    hook stderr:", ran.stderr.strip()[:400])
 for _ in range(60):
     if received:
         break
@@ -129,6 +156,8 @@ for _ in range(60):
 server.shutdown()
 
 check("the hook delivered", bool(received), True)
+check("and left a heartbeat, so a silent hook is visible",
+      os.path.exists(os.path.join(data, "hook-seen")), True)
 if received:
     path, headers, body = received[0]
     check("to the capture function", path, "/functions/v1/capture")
