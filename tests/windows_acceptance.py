@@ -44,11 +44,20 @@ def report(name, value):
 
 
 def which(*command):
-    try:
-        done = subprocess.run(list(command), capture_output=True, text=True, timeout=20)
+    # A tool installed by npm is a `.cmd` shim here, and CreateProcess does not consult
+    # PATHEXT - so looking for a bare name finds nothing and the check quietly skips itself.
+    names = [command[0]] + ([command[0] + ext for ext in (".cmd", ".exe", ".bat")]
+                            if os.name == "nt" else [])
+    for name in names:
+        try:
+            done = subprocess.run([name] + list(command[1:]), capture_output=True,
+                                  text=True, timeout=20)
+        except FileNotFoundError:
+            continue
+        except Exception as problem:
+            return [f"<{type(problem).__name__}>"]
         return (done.stdout or done.stderr or "").strip().splitlines()[:1]
-    except Exception as problem:
-        return [f"<{type(problem).__name__}>"]
+    return ["<not found>"]
 
 
 print("the machine")
@@ -180,11 +189,16 @@ if received:
           [m["role"] for m in body["messages"]], ["user", "assistant"])
     check("named from the first real question", body.get("title"), "does this work on Windows?")
     mark_file = os.path.join(data, "delivered.json")
+    # The worker holds an exclusive lock on this file while it writes; on Windows that is a
+    # PermissionError to anyone reading at the same moment, not an empty read.
+    marks = {}
     for _ in range(40):
-        if os.path.exists(mark_file):
+        try:
+            with open(mark_file, encoding="utf-8") as handle:
+                marks = json.load(handle)
             break
-        time.sleep(0.25)
-    marks = json.load(open(mark_file)) if os.path.exists(mark_file) else {}
+        except (OSError, ValueError):
+            time.sleep(0.25)
     check("and the mark was written under this source's key, with a lock this platform has",
           list(marks), [f"codex:{SESSION}"])
 
@@ -196,6 +210,25 @@ if received:
           on_failure=f"{len(received) - before} extra deliver(y|ies)")
 
 server.shutdown()
+
+print("the two things this platform gets wrong on its own")
+source = open(os.path.join(os.path.dirname(HOOK), "kollate.py"), encoding="utf-8").read()
+# `start_new_session` is POSIX-only. Left alone on Windows the worker stays inside the hook's
+# process tree, and the tool that ran the hook kills that tree the moment the hook returns -
+# three seconds before the upload finishes. Measured under Codex 0.152.0 on Windows 11 ARM64.
+check("the worker is spawned out of the tree that is about to be killed",
+      "CREATE_BREAKAWAY_FROM_JOB" in source or "0x01000000" in source)
+# Codex does not put a shell between itself and a hook command here, so the manifest the
+# installed copy points at must not need one.
+win = os.path.join(os.path.dirname(HOOK), "hooks-codex-windows.json")
+check("a Windows hook manifest ships alongside the POSIX one", os.path.isfile(win))
+if os.path.isfile(win):
+    with open(win, encoding="utf-8") as handle:
+        commands = [h["command"] for groups in json.load(handle)["hooks"].values()
+                    for g in groups for h in g["hooks"]]
+    check("and every command in it is one invocation",
+          not any(op in c for c in commands for op in ("||", "&&", "|", ";", "&")),
+          on_failure=f"shell operators in {commands}")
 
 print("\nwhat Codex itself says, if it is installed here")
 version = which("codex", "--version")[0]

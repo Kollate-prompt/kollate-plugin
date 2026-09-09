@@ -285,6 +285,40 @@ with open(os.path.join(shared, "config.json"), "w") as out:
 '@
 $pycode | & $py -
 
+
+# ------------------------------------------------------------------------------------ Codex
+# Codex keeps its own marketplace and its own copy of the manifests in this same repository,
+# so installing there is two commands rather than surgery on anybody's hooks.json.
+#
+# One thing differs on Windows and has to be repaired here. Codex runs a hook command through
+# a shell on macOS and Linux, and NOT on Windows: the `A || B || C` interpreter probe that the
+# POSIX manifest relies on is never executed here, and Codex reports the hook as Failed. The
+# Windows manifest is therefore a single `py -3` invocation with no shell operators, and this
+# is where the installed copy gets pointed at it. Rerun this installer after
+# `codex plugin marketplace upgrade` - an upgrade restores the plugin's own manifest choice.
+$codexInstalled = $false
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+  Write-Host "-> Codex found - installing there too"
+  # Adding a marketplace that is already configured is not an error worth stopping for.
+  & codex plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin 2>&1 | Out-Null
+  & codex plugin marketplace upgrade kollate 2>&1 | Out-Null
+  & codex plugin add kollate@kollate 2>&1 | Out-Null
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
+  $cache = Join-Path $codexHome 'plugins\cache\kollate\kollate'
+  $installed = if (Test-Path $cache) {
+    Get-ChildItem $cache -Directory | Sort-Object Name -Descending | Select-Object -First 1
+  } else { $null }
+  if ($installed) {
+    $manifest = Join-Path $installed.FullName '.codex-plugin\plugin.json'
+    $spec = Get-Content $manifest -Raw | ConvertFrom-Json
+    $spec.hooks = './hooks/hooks-codex-windows.json'
+    $spec | ConvertTo-Json -Depth 20 | Set-Content $manifest -Encoding UTF8
+    $codexInstalled = $true
+  } else {
+    Write-Host "   Codex is installed but the plugin could not be added."
+  }
+}
+
 Write-Host ""
 Write-Host "  Installed."
 Write-Host ""
@@ -292,3 +326,11 @@ Write-Host "  Two things left, and they are both yours:"
 Write-Host "    1. Close Claude Code completely and open it again."
 Write-Host "    2. Run:  /kollate:connect"
 Write-Host ""
+if ($codexInstalled) {
+  Write-Host "  In Codex, three things:"
+  Write-Host "    1. Quit Codex completely and open it again."
+  Write-Host "    2. Run /hooks and press t to trust Kollate's - Codex runs no hook you"
+  Write-Host "       have not approved, and says nothing when it skips one."
+  Write-Host "    3. Run:  kollate:connect"
+  Write-Host ""
+}

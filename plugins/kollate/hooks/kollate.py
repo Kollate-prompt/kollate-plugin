@@ -156,13 +156,13 @@ def safe_api_base(value: str) -> str:
     except Exception:
         return ""
 
-    host = (parsed.hostname or "").rstrip(".").lower()
-    if not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return ""
 
     # Loopback over http is for running the checks against a local stack. Nothing else may
     # be plaintext: a delivery address is where a bearer token goes.
-    if host in ("127.0.0.1", "::1", "localhost"):
+    if hostname in ("127.0.0.1", "::1", "localhost"):
         return value.rstrip("/") if parsed.scheme == "http" else ""
     if parsed.scheme != "https":
         return ""
@@ -1314,19 +1314,29 @@ def detach(work, worker_command: str, event: dict) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(event, handle)
-    subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), worker_command, path],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    argv = [sys.executable, os.path.abspath(__file__), worker_command, path]
+    streams = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.name != "nt":
+        subprocess.Popen(argv, start_new_session=True, **streams)
+        return
+
+    # `start_new_session` is a POSIX-only no-op on Windows, so a child spawned here stays
+    # inside the hook's own process tree - and the tool that ran the hook kills that tree the
+    # moment the hook returns, three seconds before the upload finishes. DETACHED_PROCESS
+    # gives the worker no console to be signalled through, and CREATE_BREAKAWAY_FROM_JOB
+    # takes it out of the job object being killed. A job may forbid breakaway; then the flag
+    # is refused outright, and the rest still buys the worker its own console and group.
+    detached = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(argv, creationflags=detached | 0x01000000, **streams)
+    except OSError:
+        subprocess.Popen(argv, creationflags=detached, **streams)
 
 
 def main() -> int:
-    command = sys.argv[1] if len(sys.argv) > 1 else "capture"
+    verb = sys.argv[1] if len(sys.argv) > 1 else "capture"
 
-    if command == "capture":
+    if verb == "capture":
         note_hook_ran()
         event = read_event()
         transcript = event.get("transcript_path") or event.get("transcriptPath") or ""
@@ -1342,7 +1352,7 @@ def main() -> int:
         detach(lambda: capture_session(transcript, session_id), "capture-worker", event)
         return 0
 
-    if command == "capture-worker":
+    if verb == "capture-worker":
         event = read_json(sys.argv[2], {})
         try:
             os.remove(sys.argv[2])
@@ -1355,7 +1365,7 @@ def main() -> int:
         capture_session(transcript, session_id)
         return 0
 
-    if command == "reconcile":
+    if verb == "reconcile":
         note_hook_ran()
         event = read_event()
         live = event.get("session_id") or event.get("sessionId") or ""
@@ -1411,7 +1421,7 @@ def main() -> int:
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
 
-    if command == "reconcile-worker":
+    if verb == "reconcile-worker":
         event = read_json(sys.argv[2], {}) if len(sys.argv) > 2 else {}
         try:
             if len(sys.argv) > 2:
@@ -1421,7 +1431,7 @@ def main() -> int:
         reconcile(event.get("session_id") or event.get("sessionId") or "")
         return 0
 
-    if command == "backfill":
+    if verb == "backfill":
         # Deliberately not a hook and not a flag anyone can set once and forget: capturing
         # history that predates consent is exactly what the enrolment gate exists to prevent,
         # so it only ever happens when a person runs this command on purpose (§2.4).
@@ -1435,22 +1445,22 @@ def main() -> int:
         scope = "all" if "all" in sys.argv[2:] else "dir"
         return backfill(limit, scope)
 
-    if command == "pause":
+    if verb == "pause":
         return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
 
-    if command == "resume":
+    if verb == "resume":
         return cmd_resume()
 
-    if command == "record":
+    if verb == "record":
         return cmd_record()
 
-    if command == "status":
+    if verb == "status":
         return cmd_status()
 
-    if command == "update":
+    if verb == "update":
         return cmd_update()
 
-    if command == "connect":
+    if verb == "connect":
         return connect()
 
     return 0
@@ -1523,9 +1533,6 @@ _CONNECTED_EXTRA = """<ul>
   __BUTTON__
   <p class="close">You can close this tab - Claude Code is finishing up.</p>"""
 
-_FAILED_EXTRA = """<p class="closef">Close this tab and run {command('connect')} again.</p>"""
-
-
 def done_page(ok: bool, endpoint: str = "") -> str:
     """The loopback listener's only response. `ok` is false when nothing usable came back."""
     if ok:
@@ -1540,7 +1547,7 @@ def done_page(ok: bool, endpoint: str = "") -> str:
     else:
         title, heading = "Not connected", "That did not complete."
         body = "Nothing was changed, and this machine is not connected."
-        extra = _FAILED_EXTRA
+        extra = f'<p class="closef">Close this tab and run {command("connect")} again.</p>'
 
     return (
         _DONE_PAGE.replace("__TITLE__", title)

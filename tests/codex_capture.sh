@@ -113,6 +113,30 @@ check("SessionStart only fires for a real session start",
 check("every hook declares the timeout Codex would clamp it to anyway",
       sorted({g[0]["timeout"] for e in manifest.values() for g in [e[0]["hooks"]]}), [3])
 
+print("the Windows manifest asks for nothing a shell would have to do")
+# Codex runs a hook command through a shell on macOS and Linux and NOT on Windows (measured
+# on Windows 11 ARM64, Codex 0.152.0, 2026-09-09): the POSIX manifest's `A || B || C`
+# interpreter probe is never executed there and the hook is reported Failed, so nothing is
+# captured. The Windows manifest is one invocation, no operators.
+WINDOWS = {
+    "Stop": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
+    "SessionEnd": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
+    "SessionStart": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile',
+}
+win = json.load(open("plugins/kollate/hooks/hooks-codex-windows.json"))["hooks"]
+check("the same events are covered", sorted(win), sorted(manifest))
+for event, want in WINDOWS.items():
+    got = win[event][0]["hooks"][0]["command"]
+    check(f"{event} runs one command", got, want)
+check("and no shell operator survives anywhere in it",
+      [c for e in win.values() for g in e for h in g["hooks"] for c in [h["command"]]
+       if any(op in c for op in ("||", "&&", "|", ";", ">", "<", "&"))], [])
+check("SessionStart still only fires for a real session start",
+      win["SessionStart"][0].get("matcher"), "startup|resume|clear")
+check("the installed copy is pointed at it on Windows and only there",
+      "hooks-codex-windows.json" in open("install.ps1").read()
+      and "hooks-codex-windows.json" not in open("install.sh").read(), True)
+
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))
 claude = json.load(open("plugins/kollate/.claude-plugin/plugin.json"))
@@ -208,6 +232,20 @@ check("the commands named are the ones this tool has", "kollate:connect" in out,
 check("and not the other tool's slash form", "/kollate:connect" in out, False)
 check("an unapproved install says so instead of looking healthy",
       "Codex will not run a hook until you approve it" in out, True)
+
+print("the helpers a message needs are still there when it is written")
+# A local named after a module-level helper makes every f-string that calls the helper raise at
+# the moment it is used - which, for a hook, is the moment a person would have been told
+# something. Codex reported "hook: Stop Failed" on Windows for exactly this.
+import ast as _ast
+_tree = _ast.parse(open("plugins/kollate/hooks/kollate.py").read())
+_helpers = {n.name for n in _tree.body if isinstance(n, _ast.FunctionDef)}
+_shadowed = []
+for _fn in [n for n in _tree.body if isinstance(n, _ast.FunctionDef)]:
+    _assigned = {t.id for n in _ast.walk(_fn) if isinstance(n, _ast.Assign)
+                 for t in n.targets if isinstance(t, _ast.Name)}
+    _shadowed += [f"{_fn.name}/{name}" for name in sorted(_assigned & _helpers)]
+check("no function shadows a helper it also calls", _shadowed, [])
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
