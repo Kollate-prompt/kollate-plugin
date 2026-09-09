@@ -151,11 +151,17 @@ print("one plugin directory, two tools, no duplicated surface")
 # lets the two tools share one plugin folder without either seeing the other's surface.
 check("Claude Code is pointed at a directory Codex will not claim",
       claude.get("commands"), "./claude-commands/")
-check("and there is no commands/ left for Codex to find",
-      os.path.isdir("plugins/kollate/commands"), False)
+check("and Codex at one Claude Code will not scan", codex.get("skills"), "./codex-skills/")
+# Both tools scan a plugin for `commands/` and `skills/` on their own, and both surface what
+# they find alongside whatever the manifest names - so a directory with either of those names
+# is served twice. Measured 2026-09-09: with the verbs in `skills/`, Claude Code reported
+# sixteen skills, each of the eight listed once from its own scan and once from the manifest.
+for claimed in ("commands", "skills"):
+    check(f"no {claimed}/ is left for either tool to find on its own",
+          os.path.isdir(f"plugins/kollate/{claimed}"), False)
 verbs = sorted(n[:-3] for n in os.listdir("plugins/kollate/claude-commands"))
 check("both tools offer the same eight",
-      sorted(os.listdir("plugins/kollate/skills")), verbs)
+      sorted(os.listdir("plugins/kollate/codex-skills")), verbs)
 
 print("end to end, through the real hook")
 received = []
