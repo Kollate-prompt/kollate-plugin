@@ -285,6 +285,82 @@ with open(os.path.join(shared, "config.json"), "w") as out:
 '@
 $pycode | & $py -
 
+
+# ------------------------------------------------------------------------------------ Codex
+# Codex keeps its own marketplace and its own copy of the manifests in this same repository,
+# so installing there is two commands rather than surgery on anybody's hooks.json.
+#
+# One thing differs on Windows and has to be repaired here. Codex runs a hook command through
+# a shell on macOS and Linux, and NOT on Windows: the `A || B || C` interpreter probe that the
+# POSIX manifest relies on is never executed here, and Codex reports the hook as Failed. The
+# Windows manifest is therefore a single `py -3` invocation with no shell operators, and this
+# is where the installed copy gets pointed at it. Rerun this installer after
+# `codex plugin marketplace upgrade` - an upgrade restores the plugin's own manifest choice.
+$codexInstalled = $false
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+  Write-Host "-> Codex found - installing there too"
+  # Adding a marketplace that is already configured is not an error worth stopping for.
+  & codex plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin 2>&1 | Out-Null
+  & codex plugin marketplace upgrade kollate 2>&1 | Out-Null
+  & codex plugin add kollate@kollate 2>&1 | Out-Null
+  $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
+  $cache = Join-Path $codexHome 'plugins\cache\kollate\kollate'
+  $installed = if (Test-Path $cache) {
+    Get-ChildItem $cache -Directory | Sort-Object Name -Descending | Select-Object -First 1
+  } else { $null }
+  if ($installed) {
+    $manifest = Join-Path $installed.FullName '.codex-plugin\plugin.json'
+    $spec = Get-Content $manifest -Raw | ConvertFrom-Json
+    $spec.hooks = './hooks/hooks-codex-windows.json'
+    $spec | ConvertTo-Json -Depth 20 | Set-Content $manifest -Encoding UTF8
+    $codexInstalled = $true
+    $writable = @'
+import os, re, shutil, sys
+
+# Codex runs a skill's shell command inside a sandbox, and everything Kollate's commands
+# change lives outside the project. Without this, `kollate:pause` is refused and a person
+# cannot stop capture from inside Codex - the one promise that must never fail.
+home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+path = os.path.join(home, "config.toml")
+# A TOML *basic* string treats a backslash as an escape, so a Windows path written that
+# way ("C:\\Users\\GT\\.kollate") makes the whole config unparseable and takes Codex
+# down with it. TOML literal strings, in single quotes, have no escapes at all.
+want = os.path.normpath(os.path.expanduser("~/.kollate"))
+
+quoted = "'" + want + "'"
+text = ""
+if os.path.isfile(path):
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+
+section = re.search(r'(?m)^\[sandbox_workspace_write\]\s*$', text)
+if section is None:
+    addition = f'\n[sandbox_workspace_write]\nwritable_roots = [{quoted}]\n'
+    new = (text.rstrip("\n") + "\n" if text.strip() else "") + addition
+elif want in text:
+    sys.exit(0)                                   # already allowed - leave the file alone
+else:
+    start = section.end()
+    body = text[start:]
+    roots = re.search(r'(?m)^writable_roots\s*=\s*\[', body)
+    if roots is None:
+        new = text[:start] + f'\nwritable_roots = [{quoted}]' + body
+    else:
+        at = start + roots.end()
+        new = text[:at] + f'{quoted}, ' + text[at:]
+
+if os.path.isfile(path):
+    shutil.copyfile(path, path + ".kollate-backup")
+os.makedirs(home, exist_ok=True)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(new)
+'@
+    $writable | & $py -
+  } else {
+    Write-Host "   Codex is installed but the plugin could not be added."
+  }
+}
+
 Write-Host ""
 Write-Host "  Installed."
 Write-Host ""
@@ -292,3 +368,11 @@ Write-Host "  Two things left, and they are both yours:"
 Write-Host "    1. Close Claude Code completely and open it again."
 Write-Host "    2. Run:  /kollate:connect"
 Write-Host ""
+if ($codexInstalled) {
+  Write-Host "  In Codex, three things:"
+  Write-Host "    1. Quit Codex completely and open it again."
+  Write-Host "    2. Run /hooks and press t to trust Kollate's - Codex runs no hook you"
+  Write-Host "       have not approved, and says nothing when it skips one."
+  Write-Host "    3. Run:  kollate:connect"
+  Write-Host ""
+}

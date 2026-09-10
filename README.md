@@ -92,3 +92,49 @@ claude plugin uninstall kollate
 In Claude Code's plugin data directory, readable only by you (`0600`), and it survives plugin
 updates. It is never passed as a command-line argument, where any other user on the machine
 could read it out of the process list.
+
+## Tests
+
+```bash
+./tests/run-all.sh            # everything that needs no database
+./tests/run-all.sh out.log    # and keep the log
+```
+
+| Suite | What it proves |
+|---|---|
+| `endpoint_resolution.sh` | The workspace address resolves in the right order, including on a surface with no settings screen |
+| `claude_capture.sh` | Claude Code: parsing, delivery, watermark, and the things that must never be captured |
+| `codex_capture.sh` | Codex: the same, plus its own record shape, its scaffolding, and the frozen hook command string |
+| `live_transcripts.sh` | The real hook over this machine's own newest transcript from each tool |
+| `hook_budget.sh` | The hook stays off the keystroke path, and its work survives being cut off |
+
+`capture_flow.sh` is not in that runner: it needs a local Supabase and `psql`, so it cannot be the
+thing anybody runs to check a change quickly. Run it separately when the server contract changes.
+
+## Codex
+
+Codex will not run a hook until somebody approves it, and says nothing when it skips one. After
+installing, start Codex, run `/hooks`, and trust Kollate's. `kollate:status` says whether the hooks
+have ever actually run.
+
+**The hook command string in `hooks-codex.json` must never change.** Codex pins hook trust to a hash
+of that exact string: a version bump keeps the trust, an edited command revokes it everywhere at
+once, silently. `codex_capture.sh` freezes it for that reason.
+
+**Windows runs the hook without a shell.** On macOS and Linux Codex hands the command to a
+shell, so the `A || B || C` interpreter probe falls through to whichever Python exists. On
+Windows it does not: the chain is never executed and Codex reports the hook as Failed, so
+nothing is captured. `hooks-codex-windows.json` is the same three hooks as one `py -3`
+invocation each, and `install.ps1` points the installed copy at it. Rerun the installer after
+`codex plugin marketplace upgrade` — an upgrade restores the plugin's own manifest choice.
+
+**Codex sandboxes a skill's command; it does not sandbox a hook.** Capture is unaffected —
+hooks run with full access, which is how delivery works at all. The commands are another
+matter: Codex's default mode ("Auto") lets a command write only inside the project and gives
+it no network, and everything Kollate changes lives in `~/.kollate`. The installer therefore
+adds that one directory to `sandbox_workspace_write.writable_roots` in `~/.codex/config.toml`
+(merging into whatever is already there, keeping a `.kollate-backup` beside it), which is what
+makes `kollate:pause`, `resume`, `stop` and `record` work from inside a session. `connect`,
+`update` and `backfill` need the network as well, so under Codex they say so and print the
+command to run in a terminal instead. Nothing here ever reports success for a change that did
+not reach disk.

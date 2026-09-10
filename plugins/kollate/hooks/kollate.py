@@ -156,13 +156,13 @@ def safe_api_base(value: str) -> str:
     except Exception:
         return ""
 
-    host = (parsed.hostname or "").rstrip(".").lower()
-    if not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return ""
 
     # Loopback over http is for running the checks against a local stack. Nothing else may
     # be plaintext: a delivery address is where a bearer token goes.
-    if host in ("127.0.0.1", "::1", "localhost"):
+    if hostname in ("127.0.0.1", "::1", "localhost"):
         return value.rstrip("/") if parsed.scheme == "http" else ""
     if parsed.scheme != "https":
         return ""
@@ -252,6 +252,50 @@ def install_statusline() -> str:
         return ""
 
 
+def host() -> str:
+    """Which tool loaded this copy of the plugin. Read from where it was installed to.
+
+    The env var is set for hooks but NOT for a skill's own shell command - Codex expands
+    ${CLAUDE_PLUGIN_ROOT} into the skill text instead of exporting it - so a Codex user was
+    being told to run `/kollate:pause`, which does not exist there. This file's own path is
+    set either way.
+    """
+    inside = os.path.join(".codex", "plugins")
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    return "codex" if inside in root or inside in os.path.abspath(__file__) else "claude_code"
+
+
+def command(verb: str) -> str:
+    """How a person invokes one of our commands, in the tool they are actually in.
+
+    Claude Code has plugin commands; Codex has skills. Printing the wrong one sends somebody
+    to a command that does not exist, which reads as "the plugin is broken".
+    """
+    # Codex namespaces a plugin's skills with the plugin name, so both tools land on the same
+    # words: /kollate:status there, kollate:status here.
+    return f"kollate:{verb}" if host() == "codex" else f"/kollate:{verb}"
+
+
+def hook_seen_path() -> str:
+    return os.path.join(plugin_dir(), "hook-seen")
+
+
+def note_hook_ran() -> None:
+    """Leave a mark that a hook actually ran.
+
+    Codex will not run a hook until somebody approves it in its own interface, and it says
+    nothing at all when it skips one - no prompt, no error, no line in the session. Without
+    this heartbeat, "installed, enabled, and capturing nothing" and "working" look identical
+    from the outside, which is exactly the week that Windows cost us once already.
+    """
+    try:
+        os.makedirs(plugin_dir(), mode=0o700, exist_ok=True)
+        with open(hook_seen_path(), "w") as handle:
+            handle.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
 def pause_path() -> str:
     # Shared, deliberately: pausing from the terminal must also pause the desktop app.
     return os.path.join(shared_dir(), "pause.json")
@@ -318,7 +362,7 @@ def update_nudge() -> str:
             pass
         # Calm one-liner by the client's request (28.08) - the old yellow block read as an
         # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
-        return ("\n" + KMARK + "Run /kollate:update and relaunch Claude: version " + latest)
+        return ("\n" + KMARK + f"Run {command('update')} and relaunch Claude: version " + latest)
     return ""
 
 
@@ -380,11 +424,11 @@ def cmd_record() -> int:
     mark_dir(cwd, excluded=False, approved=True)
     print(f"{KMARK}Recording ON for {cwd} (and its subdirectories) - any earlier opt-out here is "
           "lifted. Only turns from this moment on are captured. "
-          "Opt out again any time with /kollate:pause dir.")
-    blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+          f"Opt out again any time with {command('pause')} dir.")
+    blocked = capture_blocked(this_session())
     if blocked:
         print(f"WARNING: {blocked} machine-wide, so NOTHING is captured despite the above - "
-              "run /kollate:resume first.")
+              f"run {command('resume')} first.")
     return 0
 
 
@@ -400,7 +444,9 @@ def transcript_cwd(path: str) -> str:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                value = record.get("cwd")
+                # Claude Code puts cwd on every record; Codex puts it once, inside the
+                # session_meta payload.
+                value = record.get("cwd") or (record.get("payload") or {}).get("cwd")
                 if value:
                     return str(value)
     except OSError:
@@ -429,13 +475,34 @@ def capture_blocked(session_id: str) -> str:
     return ""
 
 
+def this_session() -> str:
+    """The id of the session this command was typed in, whichever tool that is.
+
+    Each names it differently, and pausing "this session" in the tool that does not set
+    CLAUDE_CODE_SESSION_ID would otherwise answer "could not tell which session this is" and
+    leave capture running. The hook event carries the same id, unprefixed, so what is stored
+    here is what capture_blocked() will be asked about.
+    """
+    # Order by the tool this copy was loaded by, not by whichever variable happens to be set:
+    # a Codex session started from inside a Claude Code one inherits CLAUDE_CODE_SESSION_ID,
+    # and taking that first paused the wrong session entirely (seen doing it, 2026-09-10).
+    names = ("CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID")
+    if host() != "codex":
+        names = ("CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def cmd_pause(scope: str) -> int:
     state = read_json(pause_path(), {})
     now = time.time()
     if scope in ("session", "this session", "this"):
-        sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        sid = this_session()
         if not sid:
-            print(KMARK + "Could not tell which session this is. Use a duration instead: /kollate:pause 3h")
+            print(KMARK + f"Could not tell which session this is. Use a duration instead: {command('pause')} 3h")
             return 1
         sessions = set(state.get("sessions") or [])
         sessions.add(sid)
@@ -454,16 +521,16 @@ def cmd_pause(scope: str) -> int:
         message = "Capture paused for a week."
     elif scope in ("stop", "forever", "off"):
         state["until"] = None
-        message = "Capture stopped on this machine. /kollate:resume turns it back on."
+        message = f"Capture stopped on this machine. {command('resume')} turns it back on."
     elif scope in ("dir", "directory", "this directory", "here"):
         cwd = os.getcwd()
         mark_dir(cwd, excluded=True)
         print(f"{KMARK}Opted out: sessions in {cwd} (and its subdirectories) are not captured to "
               "Kollate. Everything already sent stays; nothing new leaves this directory. "
-              "Re-include it by running /kollate:resume here.")
+              f"Re-include it by running {command('resume')} here.")
         return 0
     else:
-        print(KMARK + "Pause what? One of: session · 3h · today · week · dir (this directory)   (or /kollate:stop)")
+        print(KMARK + f"Pause what? One of: session · 3h · today · week · dir (this directory)   (or {command('stop')})")
         return 1
     write_json_private(pause_path(), state)
     print(message + " Paused turns are dropped, not queued - they will not arrive later.")
@@ -564,7 +631,7 @@ def cmd_update() -> int:
     print("Update by reinstalling - it is one paste and keeps your connection: open the "
           "Connect page of your Kollate (Connect > install command), copy the command for "
           "your platform, paste it into PowerShell (Windows) or Terminal (Mac), press "
-          "enter. Then restart Claude and run /kollate:status.")
+          f"enter. Then restart Claude and run {command('status')}.")
     return 1
 
 
@@ -575,11 +642,11 @@ def cmd_status() -> int:
     connected = bool(creds.get("capture_token") and creds.get("api_base"))
     lines = [f"{KMARK}Kollate plugin {version}"]
     lines.append(f"Endpoint: {creds.get('endpoint') or '(none)'}")
-    lines.append("Connected: " + ("yes" if connected else "NO - run /kollate:connect"))
-    blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+    lines.append("Connected: " + ("yes" if connected else f"NO - run {command('connect')}"))
+    blocked = capture_blocked(this_session())
     cwd = os.getcwd()
     if dir_excluded(cwd):
-        lines.append(f"This directory: OPTED OUT ({cwd}) - /kollate:resume here re-includes it")
+        lines.append(f"This directory: OPTED OUT ({cwd}) - {command('resume')} here re-includes it")
     else:
         lines.append(f"This directory: captured ({cwd})")
     lines.append("Pause state: " + (blocked if blocked else "not paused"))
@@ -597,6 +664,23 @@ def cmd_status() -> int:
         except OSError:
             pass
     lines.append(f"Sessions tracked on this desktop: {len(seen)}")
+    stamp = 0
+    for directory in (plugin_dir(), shared_dir()):
+        try:
+            with open(os.path.join(directory, "hook-seen")) as handle:
+                stamp = max(stamp, int(handle.read().strip() or 0))
+        except (OSError, ValueError):
+            pass
+    if stamp:
+        import datetime
+        lines.append("Hooks last ran: "
+                     + datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S"))
+    elif host() == "codex":
+        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you approve it. Start "
+                     "Codex, run /hooks, and trust Kollate's. Nothing is captured until you do.")
+    else:
+        lines.append("Hooks: never run - restart your session; if it persists, reinstall.")
+
     if newest is None:
         lines.append("Last delivery activity: never")
     else:
@@ -616,8 +700,8 @@ def cmd_status() -> int:
 def cmd_resume() -> int:
     try:
         os.remove(pause_path())
-    except OSError:
-        pass
+    except FileNotFoundError:
+        pass  # already running - saying so is the right answer
     cwd = os.getcwd()
     if dir_excluded(cwd):
         mark_dir(cwd, excluded=False)
@@ -666,9 +750,61 @@ def _flatten(content) -> str:
         return ""
     parts = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
+        # "text" is Claude Code's block; Codex writes "input_text" on the way in and
+        # "output_text" on the way out. Everything else - thinking, tool calls, images - is
+        # still dropped here, which is the rule, not an oversight.
+        if isinstance(block, dict) and block.get("type") in ("text", "input_text", "output_text"):
             parts.append(block.get("text", ""))
     return "\n".join(part for part in parts if part)
+
+
+def _codex_scaffolding(content) -> bool:
+    """Was this "user" message written by Codex rather than by a person?
+
+    Codex feeds the model its own context - <environment_context>, <recommended_plugins>,
+    <user_instructions> - as user turns. Stored, they open conversations with a wall of
+    machine text and steal the title from the real first question.
+
+    They are recognisable without an allowlist: the whole message is one XML-ish element,
+    opening tag first and closing tag last. A list of known tag names would need editing every
+    time Codex adds one, and would fail silently until somebody noticed.
+
+    ponytail: a person who pastes a bare `<div>…</div>` and nothing else loses that turn.
+    Narrow the rule to a tag allowlist if that ever actually happens.
+    """
+    text = _flatten(content).strip()
+    if not (text.startswith("<") and text.endswith(">")):
+        return False
+    opening = text[1:text.find(">")] if ">" in text else ""
+    closing = text[text.rfind("</") + 2:-1] if "</" in text else ""
+    return bool(opening) and bool(closing) and opening.replace("_", "").isalnum() \
+        and closing.replace("_", "").isalnum()
+
+
+def _as_turn(record: dict) -> dict:
+    """Codex's record shape, translated into Claude Code's.
+
+    Codex wraps every turn as `{type:"response_item", payload:{type:"message", role, content}}`
+    where Claude Code writes `{type:"user", message:{role, content}}`. Normalising here rather
+    than forking the parser means the offset handling, the torn-tail rule, the title fallback
+    and the batching all keep exactly one implementation.
+    """
+    if record.get("type") != "response_item":
+        return record
+    payload = record.get("payload") or {}
+    if payload.get("type") != "message":
+        return {}  # reasoning, tool calls, session_meta - noise, same as Claude Code's
+    role = payload.get("role")
+    if role == "user" and _codex_scaffolding(payload.get("content")):
+        return {}
+    return {
+        "type": role,
+        "message": {"role": role, "content": payload.get("content")},
+        # Codex has no per-message uuid. It does number every record, which is the same thing
+        # for our purposes: stable, unique inside the session, and already written down.
+        "uuid": f"{record.get('ordinal')}" if record.get("ordinal") is not None else None,
+        "timestamp": record.get("timestamp"),
+    }
 
 
 def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | None, bool]:
@@ -710,6 +846,8 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
             # A complete but unparseable line. Skip it and keep going: refusing to advance
             # would stall this session's capture permanently, and silently, on one bad line.
             continue
+
+        record = _as_turn(record)
 
         # `/rename` writes `custom-title`; Claude's own naming writes `ai-title`. They are not
         # interchangeable - one is a person's decision and must not be undone by the other on
@@ -787,9 +925,11 @@ def batches(turns: list[dict], first_seq: int):
 
 
 def deliver(session_id: str, messages: list[dict], creds: dict, title: str | None = None,
-            title_chosen: bool = False) -> bool:
+            title_chosen: bool = False, source: str = "claude_code") -> bool:
     """POST one delta. True only on a confirmed 2xx - that is what moves the watermark."""
-    payload = {"session_id": session_id, "messages": messages}
+    # A server that predates two surfaces ignores this field, so it is safe to send before the
+    # workspace understands it; one that knows it refuses any value but the two it knows.
+    payload = {"session_id": session_id, "messages": messages, "source": source}
     if title:
         payload["title"] = title
         # A name somebody typed with /rename must not be undone by the automatic one on the
@@ -840,7 +980,7 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
             pass
 
 
-def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
+def advance_watermark(key: str, offset: int, next_seq: int) -> None:
     """Move the mark forward, never backward, under a lock.
 
     Two hooks can be in flight at once - a slow delivery and the next turn's fast one. Without
@@ -876,10 +1016,10 @@ def advance_watermark(session_id: str, offset: int, next_seq: int) -> None:
     try:
         _lock(lock_fd)
         marks = read_json(path, {})
-        current = marks.get(session_id) or {"offset": 0, "next_seq": 0}
+        current = marks.get(key) or {"offset": 0, "next_seq": 0}
         if offset <= int(current.get("offset", 0)):
             return  # somebody else already got further; leave their mark alone
-        marks[session_id] = {"offset": offset, "next_seq": next_seq}
+        marks[key] = {"offset": offset, "next_seq": next_seq}
         write_json_private(path, marks)
     finally:
         _unlock(lock_fd)
@@ -922,7 +1062,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     cutoff = enrolled_at()
     try:
         if first_run and not ignore_enrolment:
-            advance_watermark(session_id, os.path.getsize(transcript), 0)
+            advance_watermark(watermark_key(session_id, source_of(transcript)),
+                              os.path.getsize(transcript), 0)
             return
         if os.path.getmtime(transcript) < cutoff and not ignore_enrolment:
             return  # older than enrolment - never ours to take (§2.4)
@@ -937,7 +1078,9 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
 
     sweep_stale_files()
 
-    mark = read_json(watermark_path(), {}).get(session_id) or {"offset": 0, "next_seq": 0}
+    source = source_of(transcript)
+    key = watermark_key(session_id, source)
+    mark = read_json(watermark_path(), {}).get(key) or {"offset": 0, "next_seq": 0}
     turns, _end, title, title_chosen = turns_from(transcript, int(mark.get("offset", 0)))
     if not turns:
         return
@@ -947,14 +1090,14 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         blocked = "directory opted out"
     if blocked:
         # Advance the watermark over the delta without sending it, so it is gone for good.
-        advance_watermark(session_id, _end, int(mark.get("next_seq", 0)))
+        advance_watermark(key, _end, int(mark.get("next_seq", 0)))
         return
 
     seq = int(mark.get("next_seq", 0))
     for batch, batch_end in batches(turns, seq):
         # The name rides along with the first batch only. Sending it with every batch would
         # be the same value written repeatedly for no gain.
-        if not deliver(session_id, batch, creds, title, title_chosen):
+        if not deliver(session_id, batch, creds, title, title_chosen, source):
             # Leave the watermark where the last confirmed batch left it. The next turn
             # re-sends from there, and the server dedups. Nothing is lost, nothing doubles.
             return
@@ -962,12 +1105,99 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         seq = batch[-1]["seq"] + 1
         # Only as far as THIS batch reached. Advancing to the end of the whole delta here
         # would skip the turns in a batch that has not been sent yet.
-        advance_watermark(session_id, batch_end, seq)
+        advance_watermark(key, batch_end, seq)
+
+
+CODEX_SESSIONS_ROOT = "~/.codex/sessions"
+
+
+def codex_sessions_root() -> str:
+    """Where Codex keeps its transcripts. It honours CODEX_HOME, so we do too."""
+    home = os.environ.get("CODEX_HOME")
+    if home:
+        return os.path.join(home, "sessions")
+    return os.path.expanduser(CODEX_SESSIONS_ROOT)
+
+
+def source_of(transcript: str) -> str:
+    """Which tool wrote this transcript, read from the file rather than from where it sits.
+
+    Judging by path looked simpler and was wrong: it depends on HOME resolving the same way in
+    the hook as it did when the file was written, and Codex can be moved with CODEX_HOME. A
+    misread here is not cosmetic - it picks the watermark key, so the same session would be
+    tracked under two different marks and delivered twice.
+    """
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as handle:
+            for _ in range(5):
+                line = handle.readline()
+                if not line:
+                    break
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("type") in ("session_meta", "response_item"):
+                    return "codex"
+                if record.get("type") in ("user", "assistant", "summary", "ai-title"):
+                    return "claude_code"
+    except OSError:
+        pass
+    return "claude_code"
+
+
+def watermark_key(session_id: str, source: str) -> str:
+    """The mark's key. Session ids are only unique WITHIN a tool.
+
+    Claude Code's marks were written before any other source existed, so its key stays bare -
+    prefixing it would orphan every watermark on every machine already running, and orphaned
+    marks mean re-sending whole transcripts from offset zero.
+    """
+    return session_id if source == "claude_code" else f"{source}:{session_id}"
+
+
+def session_files():
+    """Every conversation transcript on this machine: (path, session_id, source)."""
+    for directory, subdirs, files in os.walk(os.path.expanduser("~/.claude/projects")):
+        # A subagent transcript is machinery inside somebody's session, not a conversation they
+        # had - capturing it mints a phantom conversation whose first line is an agent prompt.
+        # Nothing hooks SubagentStop either, so this scan was the only way they ever got in.
+        subdirs[:] = [d for d in subdirs if d != "subagents"]
+        for name in files:
+            if name.endswith(".jsonl"):
+                yield os.path.join(directory, name), name[:-6], "claude_code"
+    for directory, _subdirs, files in os.walk(codex_sessions_root()):
+        for name in files:
+            # rollout-<iso timestamp>-<uuid>.jsonl - the uuid tail is the session id, and it
+            # equals session_meta's own id, so there is nothing to open to learn it.
+            if name.startswith("rollout-") and name.endswith(".jsonl") and len(name) > 42:
+                yield os.path.join(directory, name), name[:-6][-36:], "codex"
 
 
 def _project_slug(path: str) -> str:
     """The directory name Claude Code gives a working directory under ~/.claude/projects."""
     return "".join(ch if ch.isalnum() else "-" for ch in os.path.realpath(path))
+
+
+def _here(path: str, source: str) -> bool:
+    """Did this session run in the directory the person is standing in (or under it)?
+
+    Claude Code answers this from the folder name it files the transcript under. Codex files
+    everything in one flat date tree, so the only record of where a session ran is inside the
+    file - which is why this costs a read there and nothing here.
+    """
+    if source == "claude_code":
+        slug = _project_slug(os.getcwd())
+        base = os.path.basename(os.path.dirname(path))
+        return base == slug or base.startswith(slug + "-")
+    where = transcript_cwd(path)
+    if not where:
+        return False
+    here = os.path.realpath(os.getcwd())
+    where = os.path.realpath(where)
+    return where == here or where.startswith(here + os.sep)
 
 
 def backfill(limit: int, scope: str = "dir") -> int:
@@ -980,7 +1210,7 @@ def backfill(limit: int, scope: str = "dir") -> int:
     """
     creds = credentials()
     if not creds["capture_token"]:
-        print(KMARK + "This machine is not connected. Run /kollate:connect first.")
+        print(KMARK + f"This machine is not connected. Run {command('connect')} first.")
         return 1
 
     cutoff = enrolled_at()
@@ -988,32 +1218,26 @@ def backfill(limit: int, scope: str = "dir") -> int:
     # The default reaches back only into THIS directory's history (and its subdirectories) -
     # per the client 28.08: whole-machine history is a bigger grab than anyone expects from a
     # command they run inside one project. /kollate:backfill all is the deliberate wide net.
-    here = _project_slug(os.getcwd())
     candidates = []
-    for directory, _subdirs, files in os.walk(os.path.expanduser("~/.claude/projects")):
-        base = os.path.basename(directory)
-        if scope != "all" and not (base == here or base.startswith(here + "-")):
+    for path, session_id, source in session_files():
+        if scope != "all" and not _here(path, source):
             continue
-        for name in files:
-            if not name.endswith(".jsonl"):
+        try:
+            if os.path.getmtime(path) >= cutoff:
+                continue  # not history - the ordinary capture path already has it
+            mark = (marks.get(watermark_key(session_id, source)) or {}).get("offset", 0)
+            if os.path.getsize(path) <= int(mark):
                 continue
-            path = os.path.join(directory, name)
-            session_id = name[:-6]
-            try:
-                if os.path.getmtime(path) >= cutoff:
-                    continue  # not history - the ordinary capture path already has it
-                if os.path.getsize(path) <= int((marks.get(session_id) or {}).get("offset", 0)):
-                    continue
-            except OSError:
-                continue
-            candidates.append((os.path.getmtime(path), path, session_id))
+        except OSError:
+            continue
+        candidates.append((os.path.getmtime(path), path, session_id))
 
     candidates.sort(reverse=True)  # most recent history first - the useful end of it
     selected = candidates[:limit]
     if not selected:
         where = "this machine" if scope == "all" else "this directory"
         print(KMARK + f"No conversations in {where} from before this machine was connected."
-              + ("" if scope == "all" else " (/kollate:backfill all searches the whole machine.)"))
+              + ("" if scope == "all" else f" ({command('backfill')} all searches the whole machine.)"))
         return 0
 
     where = "this machine" if scope == "all" else "this directory"
@@ -1039,27 +1263,18 @@ def reconcile(live_session_id: str) -> None:
         return
     marks = read_json(watermark_path(), {})
     cutoff = enrolled_at()
-    root = os.path.expanduser("~/.claude/projects")
-    for directory, subdirs, files in os.walk(root):
-        # A subagent transcript is machinery inside somebody's session, not a conversation they
-        # had - capturing it mints a phantom conversation whose first line is an agent prompt.
-        # Nothing hooks SubagentStop either, so this scan was the only way they ever got in.
-        subdirs[:] = [d for d in subdirs if d != "subagents"]
-        for name in files:
-            if not name.endswith(".jsonl"):
-                continue
-            session_id = name[:-6]
-            if session_id == live_session_id:
-                continue  # the running session belongs to the Stop hook
-            path = os.path.join(directory, name)
-            try:
-                if os.path.getmtime(path) < cutoff:
-                    continue  # older than enrolment - never ours to take (§2.4)
-                if os.path.getsize(path) <= int((marks.get(session_id) or {}).get("offset", 0)):
-                    continue  # nothing new since the last confirmed delivery
-            except OSError:
-                continue
-            capture_session(path, session_id)
+    for path, session_id, source in session_files():
+        if session_id == live_session_id:
+            continue  # the running session belongs to the Stop hook
+        key = watermark_key(session_id, source)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue  # older than enrolment - never ours to take (§2.4)
+            if os.path.getsize(path) <= int((marks.get(key) or {}).get("offset", 0)):
+                continue  # nothing new since the last confirmed delivery
+        except OSError:
+            continue
+        capture_session(path, session_id)
 
 
 # ----------------------------------------------------------------------------------- main
@@ -1130,19 +1345,71 @@ def detach(work, worker_command: str, event: dict) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(event, handle)
-    subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), worker_command, path],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    argv = [sys.executable, os.path.abspath(__file__), worker_command, path]
+    streams = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.name != "nt":
+        subprocess.Popen(argv, start_new_session=True, **streams)
+        return
+
+    # `start_new_session` is a POSIX-only no-op on Windows, so a child spawned here stays
+    # inside the hook's own process tree - and the tool that ran the hook kills that tree the
+    # moment the hook returns, three seconds before the upload finishes. DETACHED_PROCESS
+    # gives the worker no console to be signalled through, and CREATE_BREAKAWAY_FROM_JOB
+    # takes it out of the job object being killed. A job may forbid breakaway; then the flag
+    # is refused outright, and the rest still buys the worker its own console and group.
+    detached = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(argv, creationflags=detached | 0x01000000, **streams)
+    except OSError:
+        subprocess.Popen(argv, creationflags=detached, **streams)
+
+
+def network_refused(verb: str) -> int:
+    """This one needs the network, and the sandbox it is running in has none.
+
+    Codex's default mode ("Auto") gives a skill's command no network at all - it sets
+    CODEX_SANDBOX_NETWORK_DISABLED. Connecting, updating and backfilling all have to reach the
+    workspace, so inside Codex they would fail one layer down, as a curl that returned nothing.
+    Better to say so before trying, and name the place it does work.
+    """
+    script = os.path.abspath(__file__)
+    print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
+    print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
+          + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
+    if verb == "connect":
+        print("Connecting also opens a browser to sign you in, which only a terminal can do.")
+    return 1
+
+
+def no_network() -> bool:
+    return os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1"
+
+
+def state_unwritable(verb: str, problem: OSError) -> int:
+    """A state change that never reached disk, explained.
+
+    Codex runs a skill's shell command inside a sandbox: writes outside the workspace are
+    refused (measured on 0.152.0 - `PermissionError` on `~/.kollate`). Every command here
+    changes machine-wide state, so under Codex this is the expected failure, not a bug, and
+    the person needs the one thing that does work - the same command in their own terminal.
+    """
+    script = os.path.abspath(__file__)
+    print(f"{KMARK}Nothing was changed - {shared_dir()} could not be written ({problem.strerror}).")
+    if host() == "codex":
+        print("Codex runs this inside a sandbox that cannot write outside your project.")
+        print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
+              + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
+        print("To let Codex do it in future, add this to ~/.codex/config.toml "
+              "(the installer does it for you):")
+        print(f'  [sandbox_workspace_write]\n  writable_roots = ["{shared_dir()}"]')
+    return 1
 
 
 def main() -> int:
-    command = sys.argv[1] if len(sys.argv) > 1 else "capture"
+    verb = sys.argv[1] if len(sys.argv) > 1 else "capture"
 
-    if command == "capture":
+    if verb == "capture":
+        note_hook_ran()
         event = read_event()
         transcript = event.get("transcript_path") or event.get("transcriptPath") or ""
         session_id = event.get("session_id") or event.get("sessionId") or ""
@@ -1157,7 +1424,7 @@ def main() -> int:
         detach(lambda: capture_session(transcript, session_id), "capture-worker", event)
         return 0
 
-    if command == "capture-worker":
+    if verb == "capture-worker":
         event = read_json(sys.argv[2], {})
         try:
             os.remove(sys.argv[2])
@@ -1170,7 +1437,8 @@ def main() -> int:
         capture_session(transcript, session_id)
         return 0
 
-    if command == "reconcile":
+    if verb == "reconcile":
+        note_hook_ran()
         event = read_event()
         live = event.get("session_id") or event.get("sessionId") or ""
         # Say out loud that capture is on, once per session - not on compaction, which would
@@ -1185,7 +1453,7 @@ def main() -> int:
                 RED, DIM, RST = "\033[31m", "\033[2m", "\033[0m"
                 print(json.dumps({"systemMessage":
                     f"{RED}\u2715{RST} {DIM}Kollate is not recording - this machine is not "
-                    f"connected. {RST}{RED}/kollate:connect{RST}{DIM} sets it up.{RST}",
+                    f"connected. {RST}{RED}{command('connect')}{RST}{DIM} sets it up.{RST}",
                     "suppressOutput": True}))
             if creds["capture_token"] and creds["endpoint"]:
                 cwd = event.get("cwd") or ""
@@ -1203,7 +1471,7 @@ def main() -> int:
                 if blocked:
                     YMARK = f"{YEL}\u2715{RST}"
                     text = (f"{YMARK} {YEL}Kollate: {blocked} - this conversation is NOT being captured.{RST} "
-                            f"{DIM}/kollate:resume turns capture back on.{RST}")
+                            f"{DIM}{command('resume')} turns capture back on.{RST}")
                 elif cwd and not dir_seen(cwd):
                     # First session ever in this directory: the loud version. Consent is
                     # only real if the first encounter cannot be missed.
@@ -1214,18 +1482,18 @@ def main() -> int:
                             "Captured: your messages and Claude's replies. Never captured: "
                             "thinking, tool output, file contents. "
                             f"{YEL}To keep THIS working directory out of Kollate, run "
-                            f"/kollate:pause and choose 'this directory'.{RST} "
+                            f"{command('pause')} and choose 'this directory'.{RST} "
                             f"{DIM}This full notice is shown once per directory; later sessions "
                             f"get one quiet line.{RST}")
                     mark_dir(cwd)
                 else:
                     text = (f"{MARK} {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
-                            f"· opt out: /kollate:pause{RST}")
+                            f"· opt out: {command('pause')}{RST}")
                 print(json.dumps({"systemMessage": text + update_nudge(), "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
 
-    if command == "reconcile-worker":
+    if verb == "reconcile-worker":
         event = read_json(sys.argv[2], {}) if len(sys.argv) > 2 else {}
         try:
             if len(sys.argv) > 2:
@@ -1235,7 +1503,7 @@ def main() -> int:
         reconcile(event.get("session_id") or event.get("sessionId") or "")
         return 0
 
-    if command == "backfill":
+    if verb == "backfill":
         # Deliberately not a hook and not a flag anyone can set once and forget: capturing
         # history that predates consent is exactly what the enrolment gate exists to prevent,
         # so it only ever happens when a person runs this command on purpose (§2.4).
@@ -1247,25 +1515,30 @@ def main() -> int:
                 except ValueError:
                     pass
         scope = "all" if "all" in sys.argv[2:] else "dir"
+        if no_network():
+            return network_refused("backfill")
         return backfill(limit, scope)
 
-    if command == "pause":
-        return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
+    if verb in ("pause", "resume", "record", "stop"):
+        try:
+            if verb == "pause":
+                return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
+            if verb == "resume":
+                return cmd_resume()
+            if verb == "record":
+                return cmd_record()
+            return cmd_pause("stop")
+        except OSError as problem:
+            return state_unwritable(verb, problem)
 
-    if command == "resume":
-        return cmd_resume()
-
-    if command == "record":
-        return cmd_record()
-
-    if command == "status":
+    if verb == "status":
         return cmd_status()
 
-    if command == "update":
-        return cmd_update()
+    if verb == "update":
+        return network_refused("update") if no_network() else cmd_update()
 
-    if command == "connect":
-        return connect()
+    if verb == "connect":
+        return network_refused("connect") if no_network() else connect()
 
     return 0
 
@@ -1337,9 +1610,6 @@ _CONNECTED_EXTRA = """<ul>
   __BUTTON__
   <p class="close">You can close this tab - Claude Code is finishing up.</p>"""
 
-_FAILED_EXTRA = """<p class="close">Close this tab and run /kollate:connect again.</p>"""
-
-
 def done_page(ok: bool, endpoint: str = "") -> str:
     """The loopback listener's only response. `ok` is false when nothing usable came back."""
     if ok:
@@ -1354,7 +1624,7 @@ def done_page(ok: bool, endpoint: str = "") -> str:
     else:
         title, heading = "Not connected", "That did not complete."
         body = "Nothing was changed, and this machine is not connected."
-        extra = _FAILED_EXTRA
+        extra = f'<p class="closef">Close this tab and run {command("connect")} again.</p>'
 
     return (
         _DONE_PAGE.replace("__TITLE__", title)
@@ -1387,6 +1657,12 @@ def connect() -> int:
             capture_output=True, text=True, timeout=20,
         )
         if not (probe.stdout or "").strip().startswith(("2", "3", "4")):
+            # Under Codex this is almost never the address: its default mode runs a skill's
+            # command with no network at all, so the first thing to reach out is the first
+            # thing to fail. Saying "check the address" would send a person to fix the one
+            # thing that is not broken.
+            if host() == "codex":
+                return network_refused("connect")
             print(f"{KMARK}{endpoint} did not respond. Check the address and try again.")
             return 1
     except Exception:
@@ -1472,7 +1748,7 @@ def connect() -> int:
         blocked = capture_blocked("")
         if blocked:
             message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
-                        "run /kollate:resume to actually start.")
+                        f"run {command('resume')} to actually start.")
         return True, message + install_statusline()
 
     class Handler(http.server.BaseHTTPRequestHandler):
