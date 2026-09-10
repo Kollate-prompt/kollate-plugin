@@ -31,14 +31,20 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 }
 # Claude Code itself is a dependency like any other. Refusing here and telling someone to go
 # run a second command is the one step that turns a one-liner back into a support thread.
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+#
+# Unless they are here for Codex. Someone who already runs Codex and not Claude Code should not
+# have a second agent installed on their machine as a side effect of capturing the one they do
+# use, so the bootstrap only fires when neither is present - the same rule install.sh follows.
+$hasCodex = [bool](Get-Command codex -ErrorAction SilentlyContinue)
+if (-not (Get-Command claude -ErrorAction SilentlyContinue) -and -not $hasCodex) {
   Write-Host "-> Installing Claude Code (one time)"
   irm https://claude.ai/install.ps1 | iex
   Sync-Path
 }
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-  Write-Host "Claude Code could not be installed automatically. Get it from https://claude.ai/download,"
-  Write-Host "then open PowerShell again and rerun the same command."
+if (-not (Get-Command claude -ErrorAction SilentlyContinue) -and -not $hasCodex) {
+  Write-Host "Neither Claude Code nor Codex is installed, and Claude Code could not be installed"
+  Write-Host "automatically. Get Claude Code from https://claude.ai/download or Codex with"
+  Write-Host "'npm i -g @openai/codex', then open PowerShell again and rerun the same command."
   return
 }
 
@@ -242,16 +248,21 @@ if removed:
 '@
 $cleancode | & $py -
 
-Write-Host "-> Adding the Kollate marketplace"
-if ((Invoke-Claude plugin marketplace add Kollate-prompt/kollate-plugin) -ne 0) {
-  Write-Host "The marketplace could not be added. Full detail: $KollateLog"
-  Write-Host "Send that file and this can be diagnosed instead of guessed at."
-  return
-}
+# Every step from here to the Codex section speaks to the `claude` CLI. On a machine that only
+# runs Codex there is nothing for them to talk to, and failing here used to `return` before the
+# Codex install was ever reached - so a Codex-only Windows user got nothing at all.
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+  Write-Host "-> Adding the Kollate marketplace"
+  if ((Invoke-Claude plugin marketplace add Kollate-prompt/kollate-plugin) -ne 0) {
+    Write-Host "The marketplace could not be added. Full detail: $KollateLog"
+    Write-Host "Send that file and this can be diagnosed instead of guessed at."
+    return
+  }
 
-Write-Host "-> Installing the plugin"
-if ((Invoke-Claude plugin install kollate) -ne 0) { $null = Invoke-Claude plugin install kollate@kollate }
-if ((Invoke-Claude plugin update kollate@kollate) -ne 0) { $null = Invoke-Claude plugin update kollate }
+  Write-Host "-> Installing the plugin"
+  if ((Invoke-Claude plugin install kollate) -ne 0) { $null = Invoke-Claude plugin install kollate@kollate }
+  if ((Invoke-Claude plugin update kollate@kollate) -ne 0) { $null = Invoke-Claude plugin update kollate }
+}
 
 Write-Host "-> Pointing it at $Url"
 $env:KOLLATE_URL = $Url
@@ -296,6 +307,14 @@ $pycode | & $py -
 # Windows manifest is therefore a single `py -3` invocation with no shell operators, and this
 # is where the installed copy gets pointed at it. Rerun this installer after
 # `codex plugin marketplace upgrade` - an upgrade restores the plugin's own manifest choice.
+#
+# Which copy, though, is not ours to predict. 0.152 ran the plugin out of
+# `plugins\cache\kollate\kollate\<version>`; 0.154 runs it out of
+# `.tmp\marketplaces\kollate\plugins\kollate`, and patching only the first left Windows
+# loading the POSIX manifest and capturing nothing, silently - the exact failure this file
+# exists to prevent, reintroduced by a version bump. So every copy under CODEX_HOME is
+# repointed, and the count is asserted rather than assumed: zero means Codex has moved the
+# plugin again and the person needs to hear so, not be told "Installed".
 $codexInstalled = $false
 if (Get-Command codex -ErrorAction SilentlyContinue) {
   Write-Host "-> Codex found - installing there too"
@@ -304,15 +323,23 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
   & codex plugin marketplace upgrade kollate 2>&1 | Out-Null
   & codex plugin add kollate@kollate 2>&1 | Out-Null
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
-  $cache = Join-Path $codexHome 'plugins\cache\kollate\kollate'
-  $installed = if (Test-Path $cache) {
-    Get-ChildItem $cache -Directory | Sort-Object Name -Descending | Select-Object -First 1
-  } else { $null }
-  if ($installed) {
-    $manifest = Join-Path $installed.FullName '.codex-plugin\plugin.json'
-    $spec = Get-Content $manifest -Raw | ConvertFrom-Json
-    $spec.hooks = './hooks/hooks-codex-windows.json'
-    $spec | ConvertTo-Json -Depth 20 | Set-Content $manifest -Encoding UTF8
+  $manifests = @(Get-ChildItem $codexHome -Recurse -Force -Filter 'plugin.json' -ErrorAction SilentlyContinue |
+    Where-Object { $_.DirectoryName -like '*\.codex-plugin' -and $_.FullName -like '*kollate*' })
+  $repointed = 0
+  foreach ($m in $manifests) {
+    try {
+      $spec = Get-Content $m.FullName -Raw | ConvertFrom-Json
+      if ($spec.name -ne 'kollate') { continue }
+      $spec.hooks = './hooks/hooks-codex-windows.json'
+      # Not Set-Content -Encoding UTF8: on Windows PowerShell 5.1 that writes a BOM, and a
+      # plugin.json beginning EF BB BF is not JSON as far as Codex is concerned. It drops the
+      # plugin's hooks and says nothing, which looks exactly like a working install.
+      [System.IO.File]::WriteAllText($m.FullName, ($spec | ConvertTo-Json -Depth 20),
+                                     (New-Object System.Text.UTF8Encoding $false))
+      $repointed++
+    } catch { }
+  }
+  if ($repointed -gt 0) {
     $codexInstalled = $true
     $writable = @'
 import os, re, shutil, sys
@@ -357,17 +384,21 @@ with open(path, "w", encoding="utf-8") as handle:
 '@
     $writable | & $py -
   } else {
-    Write-Host "   Codex is installed but the plugin could not be added."
+    Write-Host "   Codex is installed, but Kollate's manifest was not found where Codex keeps it," -ForegroundColor Yellow
+    Write-Host "   so hooks would silently never run. Nothing is being captured from Codex." -ForegroundColor Yellow
   }
 }
 
 Write-Host ""
 Write-Host "  Installed."
 Write-Host ""
-Write-Host "  Two things left, and they are both yours:"
-Write-Host "    1. Close Claude Code completely and open it again."
-Write-Host "    2. Run:  /kollate:connect"
-Write-Host ""
+# Someone here for Codex alone should not be told to restart a program they do not have.
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+  Write-Host "  Two things left, and they are both yours:"
+  Write-Host "    1. Close Claude Code completely and open it again."
+  Write-Host "    2. Run:  /kollate:connect"
+  Write-Host ""
+}
 if ($codexInstalled) {
   Write-Host "  In Codex, three things:"
   Write-Host "    1. Quit Codex completely and open it again."
