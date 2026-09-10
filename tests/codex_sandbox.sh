@@ -175,6 +175,17 @@ done = subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "paus
 check("with no session at all it says so rather than pretending", done.returncode, 1)
 check("and points at a duration instead", "Use a duration instead" in done.stdout, True)
 
+# A Codex session started from inside a Claude Code one inherits the other tool's variable.
+# Taking whichever is set first paused the wrong session - the one the person was not in.
+where = tempfile.mkdtemp()
+subprocess.run([sys.executable, os.path.join(here, "kollate.py"), "pause", "session"],
+               env=dict(base, HOME=where, CLAUDE_CODE_SESSION_ID="the-other-tool",
+                        CODEX_SESSION_ID="the-one-they-are-in"),
+               capture_output=True, text=True)
+with open(os.path.join(where, ".kollate", "pause.json")) as handle:
+    check("under Codex, Codex's own session is the one that stops",
+          json.load(handle).get("sessions"), ["the-one-they-are-in"])
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
 PY

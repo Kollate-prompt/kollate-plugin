@@ -483,7 +483,13 @@ def this_session() -> str:
     leave capture running. The hook event carries the same id, unprefixed, so what is stored
     here is what capture_blocked() will be asked about.
     """
-    for name in ("CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID"):
+    # Order by the tool this copy was loaded by, not by whichever variable happens to be set:
+    # a Codex session started from inside a Claude Code one inherits CLAUDE_CODE_SESSION_ID,
+    # and taking that first paused the wrong session entirely (seen doing it, 2026-09-10).
+    names = ("CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID")
+    if host() != "codex":
+        names = ("CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    for name in names:
         value = os.environ.get(name, "").strip()
         if value:
             return value
