@@ -24,7 +24,7 @@ main() {
   echo "plugin: $(python3 -c 'import json;print(json.load(open("plugins/kollate/.claude-plugin/plugin.json"))["version"])')"
   echo "commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'not a repository')"
   rc=0
-  for suite in endpoint_resolution.sh claude_capture.sh codex_capture.sh live_transcripts.sh hook_budget.sh; do
+  for suite in endpoint_resolution.sh claude_capture.sh codex_capture.sh live_transcripts.sh codex_sandbox.sh hook_budget.sh; do
     run "$suite" || rc=1
   done
   echo

@@ -314,6 +314,44 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
     $spec.hooks = './hooks/hooks-codex-windows.json'
     $spec | ConvertTo-Json -Depth 20 | Set-Content $manifest -Encoding UTF8
     $codexInstalled = $true
+    $writable = @'
+import os, re, shutil, sys
+
+# Codex runs a skill's shell command inside a sandbox, and everything Kollate's commands
+# change lives outside the project. Without this, `kollate:pause` is refused and a person
+# cannot stop capture from inside Codex - the one promise that must never fail.
+home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+path = os.path.join(home, "config.toml")
+want = os.path.expanduser("~/.kollate")
+
+text = ""
+if os.path.isfile(path):
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+
+section = re.search(r'(?m)^\[sandbox_workspace_write\]\s*$', text)
+if section is None:
+    addition = f'\n[sandbox_workspace_write]\nwritable_roots = ["{want}"]\n'
+    new = (text.rstrip("\n") + "\n" if text.strip() else "") + addition
+elif want in text:
+    sys.exit(0)                                   # already allowed - leave the file alone
+else:
+    start = section.end()
+    body = text[start:]
+    roots = re.search(r'(?m)^writable_roots\s*=\s*\[', body)
+    if roots is None:
+        new = text[:start] + f'\nwritable_roots = ["{want}"]' + body
+    else:
+        at = start + roots.end()
+        new = text[:at] + f'"{want}", ' + text[at:]
+
+if os.path.isfile(path):
+    shutil.copyfile(path, path + ".kollate-backup")
+os.makedirs(home, exist_ok=True)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(new)
+'@
+    $writable | & $py -
   } else {
     Write-Host "   Codex is installed but the plugin could not be added."
   }

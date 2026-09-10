@@ -253,9 +253,16 @@ def install_statusline() -> str:
 
 
 def host() -> str:
-    """Which tool loaded this copy of the plugin. Read from where it was installed from."""
+    """Which tool loaded this copy of the plugin. Read from where it was installed to.
+
+    The env var is set for hooks but NOT for a skill's own shell command - Codex expands
+    ${CLAUDE_PLUGIN_ROOT} into the skill text instead of exporting it - so a Codex user was
+    being told to run `/kollate:pause`, which does not exist there. This file's own path is
+    set either way.
+    """
+    inside = os.path.join(".codex", "plugins")
     root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    return "codex" if os.path.join(".codex", "plugins") in root else "claude_code"
+    return "codex" if inside in root or inside in os.path.abspath(__file__) else "claude_code"
 
 
 def command(verb: str) -> str:
@@ -672,8 +679,8 @@ def cmd_status() -> int:
 def cmd_resume() -> int:
     try:
         os.remove(pause_path())
-    except OSError:
-        pass
+    except FileNotFoundError:
+        pass  # already running - saying so is the right answer
     cwd = os.getcwd()
     if dir_excluded(cwd):
         mark_dir(cwd, excluded=False)
@@ -1333,6 +1340,47 @@ def detach(work, worker_command: str, event: dict) -> None:
         subprocess.Popen(argv, creationflags=detached, **streams)
 
 
+def network_refused(verb: str) -> int:
+    """This one needs the network, and the sandbox it is running in has none.
+
+    Codex's default mode ("Auto") gives a skill's command no network at all - it sets
+    CODEX_SANDBOX_NETWORK_DISABLED. Connecting, updating and backfilling all have to reach the
+    workspace, so inside Codex they would fail one layer down, as a curl that returned nothing.
+    Better to say so before trying, and name the place it does work.
+    """
+    script = os.path.abspath(__file__)
+    print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
+    print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
+          + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
+    if verb == "connect":
+        print("Connecting also opens a browser to sign you in, which only a terminal can do.")
+    return 1
+
+
+def no_network() -> bool:
+    return os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED") == "1"
+
+
+def state_unwritable(verb: str, problem: OSError) -> int:
+    """A state change that never reached disk, explained.
+
+    Codex runs a skill's shell command inside a sandbox: writes outside the workspace are
+    refused (measured on 0.152.0 - `PermissionError` on `~/.kollate`). Every command here
+    changes machine-wide state, so under Codex this is the expected failure, not a bug, and
+    the person needs the one thing that does work - the same command in their own terminal.
+    """
+    script = os.path.abspath(__file__)
+    print(f"{KMARK}Nothing was changed - {shared_dir()} could not be written ({problem.strerror}).")
+    if host() == "codex":
+        print("Codex runs this inside a sandbox that cannot write outside your project.")
+        print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
+              + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
+        print("To let Codex do it in future, add this to ~/.codex/config.toml "
+              "(the installer does it for you):")
+        print(f'  [sandbox_workspace_write]\n  writable_roots = ["{shared_dir()}"]')
+    return 1
+
+
 def main() -> int:
     verb = sys.argv[1] if len(sys.argv) > 1 else "capture"
 
@@ -1443,25 +1491,30 @@ def main() -> int:
                 except ValueError:
                     pass
         scope = "all" if "all" in sys.argv[2:] else "dir"
+        if no_network():
+            return network_refused("backfill")
         return backfill(limit, scope)
 
-    if verb == "pause":
-        return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
-
-    if verb == "resume":
-        return cmd_resume()
-
-    if verb == "record":
-        return cmd_record()
+    if verb in ("pause", "resume", "record", "stop"):
+        try:
+            if verb == "pause":
+                return cmd_pause(" ".join(sys.argv[2:]).strip().lower())
+            if verb == "resume":
+                return cmd_resume()
+            if verb == "record":
+                return cmd_record()
+            return cmd_pause("stop")
+        except OSError as problem:
+            return state_unwritable(verb, problem)
 
     if verb == "status":
         return cmd_status()
 
     if verb == "update":
-        return cmd_update()
+        return network_refused("update") if no_network() else cmd_update()
 
     if verb == "connect":
-        return connect()
+        return network_refused("connect") if no_network() else connect()
 
     return 0
 
@@ -1580,6 +1633,12 @@ def connect() -> int:
             capture_output=True, text=True, timeout=20,
         )
         if not (probe.stdout or "").strip().startswith(("2", "3", "4")):
+            # Under Codex this is almost never the address: its default mode runs a skill's
+            # command with no network at all, so the first thing to reach out is the first
+            # thing to fail. Saying "check the address" would send a person to fix the one
+            # thing that is not broken.
+            if host() == "codex":
+                return network_refused("connect")
             print(f"{KMARK}{endpoint} did not respond. Check the address and try again.")
             return 1
     except Exception:

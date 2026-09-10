@@ -127,3 +127,14 @@ Windows it does not: the chain is never executed and Codex reports the hook as F
 nothing is captured. `hooks-codex-windows.json` is the same three hooks as one `py -3`
 invocation each, and `install.ps1` points the installed copy at it. Rerun the installer after
 `codex plugin marketplace upgrade` — an upgrade restores the plugin's own manifest choice.
+
+**Codex sandboxes a skill's command; it does not sandbox a hook.** Capture is unaffected —
+hooks run with full access, which is how delivery works at all. The commands are another
+matter: Codex's default mode ("Auto") lets a command write only inside the project and gives
+it no network, and everything Kollate changes lives in `~/.kollate`. The installer therefore
+adds that one directory to `sandbox_workspace_write.writable_roots` in `~/.codex/config.toml`
+(merging into whatever is already there, keeping a `.kollate-backup` beside it), which is what
+makes `kollate:pause`, `resume`, `stop` and `record` work from inside a session. `connect`,
+`update` and `backfill` need the network as well, so under Codex they say so and print the
+command to run in a terminal instead. Nothing here ever reports success for a change that did
+not reach disk.
