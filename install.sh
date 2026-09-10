@@ -323,10 +323,10 @@ cat <<CODEX_DONE
 
     1. Start Codex. It will say some hooks need review.
     2. Trust Kollate's. (Or run /hooks at any time and trust them there.)
-    3. Then:  kollate-connect
+    3. Then:  kollate:connect
 
   Codex will not run a hook it has not been shown, and it says nothing when it skips one -
-  so an unapproved install looks exactly like a working one. kollate-status will tell you
+  so an unapproved install looks exactly like a working one. kollate:status will tell you
   whether the hooks have ever actually run.
 
 CODEX_DONE
