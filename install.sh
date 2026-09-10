@@ -260,8 +260,12 @@ import os, re, shutil, sys
 # cannot stop capture from inside Codex - the one promise that must never fail.
 home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
 path = os.path.join(home, "config.toml")
-want = os.path.expanduser("~/.kollate")
+# A TOML *basic* string treats a backslash as an escape, so a Windows path written that
+# way ("C:\\Users\\GT\\.kollate") makes the whole config unparseable and takes Codex
+# down with it. TOML literal strings, in single quotes, have no escapes at all.
+want = os.path.normpath(os.path.expanduser("~/.kollate"))
 
+quoted = "'" + want + "'"
 text = ""
 if os.path.isfile(path):
     with open(path, encoding="utf-8") as handle:
@@ -269,7 +273,7 @@ if os.path.isfile(path):
 
 section = re.search(r'(?m)^\[sandbox_workspace_write\]\s*$', text)
 if section is None:
-    addition = f'\n[sandbox_workspace_write]\nwritable_roots = ["{want}"]\n'
+    addition = f'\n[sandbox_workspace_write]\nwritable_roots = [{quoted}]\n'
     new = (text.rstrip("\n") + "\n" if text.strip() else "") + addition
 elif want in text:
     sys.exit(0)                                   # already allowed - leave the file alone
@@ -278,10 +282,10 @@ else:
     body = text[start:]
     roots = re.search(r'(?m)^writable_roots\s*=\s*\[', body)
     if roots is None:
-        new = text[:start] + f'\nwritable_roots = ["{want}"]' + body
+        new = text[:start] + f'\nwritable_roots = [{quoted}]' + body
     else:
         at = start + roots.end()
-        new = text[:at] + f'"{want}", ' + text[at:]
+        new = text[:at] + f'{quoted}, ' + text[at:]
 
 if os.path.isfile(path):
     shutil.copyfile(path, path + ".kollate-backup")

@@ -27,6 +27,7 @@ script = found.group(1) if found else ""
 check("and install.ps1 carries the same text", script in open("install.ps1").read(), True)
 
 home = os.path.expanduser("~/.kollate")
+WINDOWS_PATH = chr(67) + ":" + chr(92) + "Users" + chr(92) + "GT" + chr(92) + "other"
 CASES = {
     "no config at all": (None, [home]),
     "an empty config": ("", [home]),
@@ -34,6 +35,11 @@ CASES = {
     "the section, without the setting": ("[sandbox_workspace_write]\nnetwork_access = true\n", [home]),
     "the setting, with somebody else's path": (
         '[sandbox_workspace_write]\nwritable_roots = ["/opt/x"]\n', [home, "/opt/x"]),
+    # A Windows path in a TOML basic string is a file full of invalid escapes - a lone "\\U"
+    # takes Codex down with it. Seen on the bench machine before this was a literal string.
+    "somebody else's Windows path": (
+        f"[sandbox_workspace_write]\nwritable_roots = ['{WINDOWS_PATH}']\n",
+        [home, WINDOWS_PATH]),
     "the setting, already ours": (
         f'[sandbox_workspace_write]\nwritable_roots = ["{home}"]\n', [home]),
 }
