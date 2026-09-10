@@ -425,7 +425,7 @@ def cmd_record() -> int:
     print(f"{KMARK}Recording ON for {cwd} (and its subdirectories) - any earlier opt-out here is "
           "lifted. Only turns from this moment on are captured. "
           f"Opt out again any time with {command('pause')} dir.")
-    blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+    blocked = capture_blocked(this_session())
     if blocked:
         print(f"WARNING: {blocked} machine-wide, so NOTHING is captured despite the above - "
               f"run {command('resume')} first.")
@@ -475,11 +475,26 @@ def capture_blocked(session_id: str) -> str:
     return ""
 
 
+def this_session() -> str:
+    """The id of the session this command was typed in, whichever tool that is.
+
+    Each names it differently, and pausing "this session" in the tool that does not set
+    CLAUDE_CODE_SESSION_ID would otherwise answer "could not tell which session this is" and
+    leave capture running. The hook event carries the same id, unprefixed, so what is stored
+    here is what capture_blocked() will be asked about.
+    """
+    for name in ("CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def cmd_pause(scope: str) -> int:
     state = read_json(pause_path(), {})
     now = time.time()
     if scope in ("session", "this session", "this"):
-        sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        sid = this_session()
         if not sid:
             print(KMARK + f"Could not tell which session this is. Use a duration instead: {command('pause')} 3h")
             return 1
@@ -622,7 +637,7 @@ def cmd_status() -> int:
     lines = [f"{KMARK}Kollate plugin {version}"]
     lines.append(f"Endpoint: {creds.get('endpoint') or '(none)'}")
     lines.append("Connected: " + ("yes" if connected else f"NO - run {command('connect')}"))
-    blocked = capture_blocked(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+    blocked = capture_blocked(this_session())
     cwd = os.getcwd()
     if dir_excluded(cwd):
         lines.append(f"This directory: OPTED OUT ({cwd}) - {command('resume')} here re-includes it")

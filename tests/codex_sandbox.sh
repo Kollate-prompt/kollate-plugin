@@ -151,6 +151,30 @@ check("it blames the sandbox, not the address", "needs the network" in done.stdo
 check("and never tells them to check the address",
       "Check the address" in done.stdout, False)
 
+print("pausing just this session, in either tool")
+# Each tool names the session differently. Reading only Claude Code's name meant that in
+# Codex `kollate:pause session` answered "could not tell which session this is" and left
+# capture running - the worst possible outcome for an opt-out.
+room = tempfile.mkdtemp()
+base = dict(os.environ, HOME=room, CLAUDE_PLUGIN_DATA=os.path.join(room, "data"))
+base.pop("CLAUDE_CODE_SESSION_ID", None)
+base.pop("CODEX_SESSION_ID", None)
+base.pop("CODEX_THREAD_ID", None)
+for name, wanted in (("CLAUDE_CODE_SESSION_ID", "from-claude"), ("CODEX_SESSION_ID", "from-codex"),
+                     ("CODEX_THREAD_ID", "from-thread")):
+    where = tempfile.mkdtemp()
+    done = subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "pause", "session"],
+                          env=dict(base, HOME=where, **{name: wanted}),
+                          capture_output=True, text=True)
+    check(f"{name} is understood", done.returncode, 0)
+    with open(os.path.join(where, ".kollate", "pause.json")) as handle:
+        check(f"and {wanted} is the session that stopped",
+              json.load(handle).get("sessions"), [wanted])
+done = subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "pause", "session"],
+                      env=dict(base, HOME=tempfile.mkdtemp()), capture_output=True, text=True)
+check("with no session at all it says so rather than pretending", done.returncode, 1)
+check("and points at a duration instead", "Use a duration instead" in done.stdout, True)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
 PY
