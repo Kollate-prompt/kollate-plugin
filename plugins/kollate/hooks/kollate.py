@@ -904,9 +904,11 @@ def batches(turns: list[dict], first_seq: int):
 
 
 def deliver(session_id: str, messages: list[dict], creds: dict, title: str | None = None,
-            title_chosen: bool = False) -> bool:
+            title_chosen: bool = False, source: str = "claude_code") -> bool:
     """POST one delta. True only on a confirmed 2xx - that is what moves the watermark."""
-    payload = {"session_id": session_id, "messages": messages}
+    # A server that predates two surfaces ignores this field, so it is safe to send before the
+    # workspace understands it; one that knows it refuses any value but the two it knows.
+    payload = {"session_id": session_id, "messages": messages, "source": source}
     if title:
         payload["title"] = title
         # A name somebody typed with /rename must not be undone by the automatic one on the
@@ -1055,7 +1057,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
 
     sweep_stale_files()
 
-    key = watermark_key(session_id, source_of(transcript))
+    source = source_of(transcript)
+    key = watermark_key(session_id, source)
     mark = read_json(watermark_path(), {}).get(key) or {"offset": 0, "next_seq": 0}
     turns, _end, title, title_chosen = turns_from(transcript, int(mark.get("offset", 0)))
     if not turns:
@@ -1073,7 +1076,7 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     for batch, batch_end in batches(turns, seq):
         # The name rides along with the first batch only. Sending it with every batch would
         # be the same value written repeatedly for no gain.
-        if not deliver(session_id, batch, creds, title, title_chosen):
+        if not deliver(session_id, batch, creds, title, title_chosen, source):
             # Leave the watermark where the last confirmed batch left it. The next turn
             # re-sends from there, and the server dedups. Nothing is lost, nothing doubles.
             return

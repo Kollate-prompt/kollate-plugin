@@ -158,6 +158,9 @@ if received:
     check("carrying both turns", [m["role"] for m in body["messages"]], ["user", "assistant"])
     check("numbered from zero", [m["seq"] for m in body["messages"]], [0, 1])
     check("named", body.get("title"), "Rotating the key")
+    # The workspace cannot tell the two tools apart on shape alone, so the tool says which
+    # it is - and this one must keep saying it even though it is the older surface.
+    check("and says which tool it came from", body.get("source"), "claude_code")
     check("and no thinking left in it",
           any("never stored" in m["content"] for m in body["messages"]), False)
     mark_file = os.path.join(data, "delivered.json")

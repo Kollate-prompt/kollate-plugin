@@ -214,6 +214,9 @@ if received:
     check("carrying both turns", [m["role"] for m in body["messages"]], ["user", "assistant"])
     check("numbered from zero", [m["seq"] for m in body["messages"]], [0, 1])
     check("named", body.get("title"), "how do I rotate the key?")
+    # The workspace cannot tell the two tools apart on shape alone - same fields, same
+    # delivery - so the tool has to say which it is.
+    check("and says which tool it came from", body.get("source"), "codex")
     check("and nothing Codex wrote itself",
           any("environment_context" in m["content"] for m in body["messages"]), False)
     # The mark is written by the detached child after the POST it just made, so it can land a
