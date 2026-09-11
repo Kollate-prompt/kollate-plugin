@@ -151,6 +151,40 @@ check("the Windows file asks for nothing a shell would have to do",
        for g in e for h in g["hooks"] for c in [h["command"]]
        if any(op in c for op in ("||", "&&", "|", ";", ">", "<", "&"))], [])
 
+print("the Failed hook explains itself, once")
+# The two-interpreter file means Codex reports one hook Failed every session. Unexplained, that
+# reads as a broken install; explained every session, it is noise. Once per machine, and only
+# when the manifest still names the file that causes it.
+import tempfile
+HOME_NOTE = tempfile.mkdtemp()
+NOTE_CODE = """
+import json, os, sys
+sys.argv = ["kollate.py", "status"]
+sys.path.insert(0, %r)
+import importlib.util
+spec = importlib.util.spec_from_file_location("k", %r)
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+root = os.environ["CLAUDE_PLUGIN_ROOT"]
+os.makedirs(os.path.join(root, ".codex-plugin"), exist_ok=True)
+with open(os.path.join(root, ".codex-plugin", "plugin.json"), "w") as h:
+    json.dump({"hooks": os.environ["WANT_HOOKS"]}, h)
+print(json.dumps([bool(k.hook_pair_note()), bool(k.hook_pair_note())]))
+""" % ("plugins/kollate/hooks", os.path.abspath("plugins/kollate/hooks/kollate.py"))
+
+def note_says(hooks_value):
+    root = tempfile.mkdtemp()
+    env = dict(os.environ, HOME=tempfile.mkdtemp(), CLAUDE_PLUGIN_ROOT=root,
+               WANT_HOOKS=hooks_value)
+    env.pop("CLAUDE_PLUGIN_DATA", None)
+    out = subprocess.run([sys.executable, "-c", NOTE_CODE], env=env,
+                         capture_output=True, text=True).stdout
+    return json.loads(out or "[null, null]")
+
+check("it speaks the first time the two-interpreter file is in use",
+      note_says("./hooks/hooks-codex.json"), [True, False])
+check("and never when an installer has repointed the manifest",
+      note_says("./hooks/hooks-codex-windows.json"), [False, False])
+
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))
 claude = json.load(open("plugins/kollate/.claude-plugin/plugin.json"))

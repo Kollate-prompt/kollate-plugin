@@ -85,6 +85,40 @@ def configured_endpoint() -> str:
     return "https://app.kollate.ai"
 
 
+def hook_pair_note() -> str:
+    """One line, once per machine, explaining the hook Codex reports as Failed.
+
+    Codex has no way to name a different command per operating system - a `command_windows` key
+    and a per-OS manifest value were both tested on Windows 11 and silently ignored - so the
+    shipped hooks file names both interpreters and lets the one this machine lacks fail. Codex
+    prints that as "Failed" beside the one that worked, which reads as a broken install to
+    someone who has no reason to know any of the above.
+
+    Only the plugin-screen and `codex plugin add` routes see it; both installers repoint the
+    installed copy at a single command. So this speaks only when the manifest still names the
+    two-interpreter file, and only the first time on a machine.
+    """
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if not root:
+        return ""
+    spec = read_json(os.path.join(root, ".codex-plugin", "plugin.json"), {})
+    if spec.get("hooks") != "./hooks/hooks-codex.json":
+        return ""
+    marker = os.path.join(plugin_dir(), "hook-pair-note")
+    if os.path.exists(marker):
+        return ""
+    try:
+        os.makedirs(plugin_dir(), exist_ok=True)
+        with open(marker, "w") as handle:
+            handle.write(str(int(time.time())))
+    except OSError:
+        return ""          # cannot remember having said it, so do not say it
+    return ("\n\033[2mOne of Kollate's hooks is reported as Failed each session. That is expected "
+            "and capture is working: Codex cannot name a different command per operating system, "
+            "so Kollate offers both and the one this computer does not have cannot start. Shown "
+            "once.\033[0m")
+
+
 def watermark_path() -> str:
     return os.path.join(plugin_dir(), "delivered.json")
 
@@ -1489,7 +1523,8 @@ def main() -> int:
                 else:
                     text = (f"{MARK} {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
                             f"· opt out: {command('pause')}{RST}")
-                print(json.dumps({"systemMessage": text + update_nudge(), "suppressOutput": True}))
+                print(json.dumps({"systemMessage": text + update_nudge() + hook_pair_note(),
+                                  "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0
 
