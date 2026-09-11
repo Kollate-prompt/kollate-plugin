@@ -117,16 +117,31 @@ Codex will not run a hook until somebody approves it, and says nothing when it s
 installing, start Codex, run `/hooks`, and trust Kollate's. `kollate:status` says whether the hooks
 have ever actually run.
 
-**The hook command string in `hooks-codex.json` must never change.** Codex pins hook trust to a hash
-of that exact string: a version bump keeps the trust, an edited command revokes it everywhere at
-once, silently. `codex_capture.sh` freezes it for that reason.
+**The hook command strings must never change casually.** Codex pins hook trust to a hash of each
+hook definition: a version bump keeps the trust, an edited command revokes it everywhere at once,
+silently — no prompt, no error, and no `hook:` line at all. `codex_capture.sh` freezes them for
+that reason. Changing one is a release note plus a `/hooks` re-approval for every installed
+machine.
 
 **Windows runs the hook without a shell.** On macOS and Linux Codex hands the command to a
-shell, so the `A || B || C` interpreter probe falls through to whichever Python exists. On
-Windows it does not: the chain is never executed and Codex reports the hook as Failed, so
-nothing is captured. `hooks-codex-windows.json` is the same three hooks as one `py -3`
-invocation each, and `install.ps1` points the installed copy at it. Rerun the installer after
-`codex plugin marketplace upgrade` — an upgrade restores the plugin's own manifest choice.
+shell, so an `A || B` interpreter probe falls through to whichever Python exists. On Windows it
+does not: the chain is never executed and Codex reports the hook as Failed, so nothing is
+captured.
+
+**Three hooks files, because Codex has no per-OS field.** A `command_windows` key and a per-OS
+object in the manifest's `hooks` value were both tested on Windows 11 and silently ignored
+(2026-09-11), and Windows cannot execute `kollate.py` directly. So:
+
+| file | who points at it | shape |
+|---|---|---|
+| `hooks-codex.json` | the plugin manifest — what a **plugin-screen install** gets, on either system | two entries per hook, `python3` and `py -3`; each system completes one and reports the other Failed |
+| `hooks-codex-posix.json` | `install.sh` | one `python3 || python` command |
+| `hooks-codex-windows.json` | `install.ps1` | one `py -3` command |
+
+The visible Failed line is the price of the plugin-screen route working on Windows at all; anybody
+who ran an installer never sees it, because both installers repoint the installed copy. Rerun the
+installer after `codex plugin marketplace upgrade` — an upgrade restores the plugin's own manifest
+choice.
 
 **Codex sandboxes a skill's command; it does not sandbox a hook.** Capture is unaffected —
 hooks run with full access, which is how delivery works at all. The commands are another

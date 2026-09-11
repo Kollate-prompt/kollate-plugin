@@ -252,6 +252,27 @@ if command -v codex >/dev/null; then
   codex plugin marketplace upgrade kollate >>"$KOLLATE_LOG" 2>&1 || true
   if codex plugin add kollate@kollate >>"$KOLLATE_LOG" 2>&1; then
     CODEX_INSTALLED="yes"
+    # The shipped hooks file has to serve a plugin-screen install on either system, so it
+    # carries both interpreters and lets the wrong one fail visibly. Nobody who ran this
+    # script needs to see that: point the installed copy at the POSIX-only file, exactly as
+    # install.ps1 points a Windows install at its own. `marketplace upgrade` undoes this,
+    # which is why rerunning this command is the documented repair.
+    python3 - <<'KOLLATE_POSIX_HOOKS' >>"$KOLLATE_LOG" 2>&1 || true
+import glob, json, os
+
+home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+for manifest in glob.glob(os.path.join(home, "**", ".codex-plugin", "plugin.json"),
+                          recursive=True):
+    if "kollate" not in manifest:
+        continue
+    with open(manifest, encoding="utf-8") as handle:
+        spec = json.load(handle)
+    if spec.get("hooks") == "./hooks/hooks-codex-posix.json":
+        continue
+    spec["hooks"] = "./hooks/hooks-codex-posix.json"
+    with open(manifest, "w", encoding="utf-8") as handle:
+        json.dump(spec, handle, indent=2)
+KOLLATE_POSIX_HOOKS
     python3 - <<'KOLLATE_WRITABLE' >>"$KOLLATE_LOG" 2>&1 || true
 import os, re, shutil, sys
 

@@ -94,48 +94,62 @@ found = json.loads(subprocess.run([sys.executable, "-c", CODE], env=dict(os.envi
 check("the Codex tree is scanned",
       found, [["01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee", "codex"]])
 
-print("the hook command string is frozen")
-# Codex pins its hook trust to a hash of this string. Changing it revokes the trust every
-# installed machine has already granted - silently: no prompt, no error, the hook simply
-# stops running and capture stops with it (measured 2026-09-07). If this test fails, the
-# change is not a refactor, it is a release note and a re-approval for every user.
-FROZEN = {
-    "stop": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
-    "session_end": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture || python -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
-    "session_start": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile || python3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile || python -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile',
+print("the hook command strings are frozen")
+# Codex pins its hook trust to a hash of each hook definition. Changing one revokes the trust
+# every installed machine has already granted - silently: no prompt, no error, no `hook:` line
+# at all, and capture stops with it (measured 2026-09-07, re-confirmed 2026-09-11). If this
+# test fails, the change is not a refactor, it is a release note and a re-approval for every
+# user, done with /hooks.
+S = "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py"
+
+# The shipped file has to serve a plugin-screen install on BOTH systems, and Codex offers no
+# per-OS field: a `command_windows` key and a per-OS object in the manifest were both tested on
+# Windows 11 and silently ignored (2026-09-11). So it carries both interpreters as two entries.
+# Codex runs each one; the interpreter that exists completes and the other is reported Failed.
+# That visible failure is what buys a working UI route on Windows, where the POSIX `A || B || C`
+# probe is never executed at all because Codex runs hook commands through a shell on macOS and
+# Linux but not on Windows.
+CROSS = {
+    "Stop": "capture", "SessionEnd": "capture", "SessionStart": "reconcile",
 }
 manifest = json.load(open("plugins/kollate/hooks/hooks-codex.json"))["hooks"]
-for event, want in (("Stop", "stop"), ("SessionEnd", "session_end"), ("SessionStart", "session_start")):
-    got = manifest[event][0]["hooks"][0]["command"]
-    check(f"{event} still runs exactly what Codex trusted", got, FROZEN[want])
+for event, verb in CROSS.items():
+    got = [h["command"] for h in manifest[event][0]["hooks"]]
+    check(f"{event} offers both interpreters", got,
+          [f'python3 -S -E "{S}" {verb}', f'py -3 -S -E "{S}" {verb}'])
+check("neither entry needs a shell",
+      [c for e in manifest.values() for g in e for h in g["hooks"] for c in [h["command"]]
+       if any(op in c for op in ("||", "&&", "|", ";", ">", "<", "&"))], [])
 check("SessionStart only fires for a real session start",
       manifest["SessionStart"][0].get("matcher"), "startup|resume|clear")
 check("every hook declares the timeout Codex would clamp it to anyway",
-      sorted({g[0]["timeout"] for e in manifest.values() for g in [e[0]["hooks"]]}), [3])
+      sorted({h["timeout"] for e in manifest.values() for g in e for h in g["hooks"]}), [3])
 
-print("the Windows manifest asks for nothing a shell would have to do")
-# Codex runs a hook command through a shell on macOS and Linux and NOT on Windows (measured
-# on Windows 11 ARM64, Codex 0.152.0, 2026-09-09): the POSIX manifest's `A || B || C`
-# interpreter probe is never executed there and the hook is reported Failed, so nothing is
-# captured. The Windows manifest is one invocation, no operators.
-WINDOWS = {
-    "Stop": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
-    "SessionEnd": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" capture',
-    "SessionStart": 'py -3 -S -E "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" reconcile',
+print("each installer points at the single-command file for its own system")
+# Nobody who ran an installer should see a hook fail, so each one repoints the installed copy
+# at a file holding one invocation. `marketplace upgrade` undoes that, which is why rerunning
+# the install command is the documented repair.
+SINGLE = {
+    "hooks-codex-windows.json": ('py -3 -S -E "%s" %s', "install.ps1", "install.sh"),
+    "hooks-codex-posix.json": ('python3 -S -E "%s" %s || python -S -E "%s" %s',
+                               "install.sh", "install.ps1"),
 }
-win = json.load(open("plugins/kollate/hooks/hooks-codex-windows.json"))["hooks"]
-check("the same events are covered", sorted(win), sorted(manifest))
-for event, want in WINDOWS.items():
-    got = win[event][0]["hooks"][0]["command"]
-    check(f"{event} runs one command", got, want)
-check("and no shell operator survives anywhere in it",
-      [c for e in win.values() for g in e for h in g["hooks"] for c in [h["command"]]
+for name, (shape, mine, theirs) in SINGLE.items():
+    one = json.load(open("plugins/kollate/hooks/" + name))["hooks"]
+    check(f"{name} covers the same events", sorted(one), sorted(manifest))
+    for event, verb in CROSS.items():
+        entries = one[event][0]["hooks"]
+        check(f"{name} {event} runs one command", len(entries), 1)
+        want = shape % ((S, verb) if shape.count("%s") == 2 else (S, verb, S, verb))
+        check(f"{name} {event} is that command", entries[0]["command"], want)
+    check(f"{name} still only fires SessionStart for a real session start",
+          one["SessionStart"][0].get("matcher"), "startup|resume|clear")
+    check(f"{name} is pointed at by {mine} and only there",
+          name in open(mine).read() and name not in open(theirs).read(), True)
+check("the Windows file asks for nothing a shell would have to do",
+      [c for e in json.load(open("plugins/kollate/hooks/hooks-codex-windows.json"))["hooks"].values()
+       for g in e for h in g["hooks"] for c in [h["command"]]
        if any(op in c for op in ("||", "&&", "|", ";", ">", "<", "&"))], [])
-check("SessionStart still only fires for a real session start",
-      win["SessionStart"][0].get("matcher"), "startup|resume|clear")
-check("the installed copy is pointed at it on Windows and only there",
-      "hooks-codex-windows.json" in open("install.ps1").read()
-      and "hooks-codex-windows.json" not in open("install.sh").read(), True)
 
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))

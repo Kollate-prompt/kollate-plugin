@@ -5,7 +5,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "command": "python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
             "timeout": 3
           }
         ]
@@ -16,7 +21,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture || python -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "command": "python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
             "timeout": 3
           }
         ]
@@ -27,7 +37,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile || python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile || python -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile",
+            "command": "python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile",
             "timeout": 3
           }
         ],
