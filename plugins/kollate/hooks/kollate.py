@@ -1487,7 +1487,8 @@ def main() -> int:
                 RED, DIM, RST = "\033[31m", "\033[2m", "\033[0m"
                 print(json.dumps({"systemMessage":
                     f"{RED}\u2715{RST} {DIM}Kollate is not recording - this machine is not "
-                    f"connected. {RST}{RED}{command('connect')}{RST}{DIM} sets it up.{RST}",
+                    f"connected. {RST}{RED}{command('connect')}{RST}{DIM} sets it up.{RST}"
+                    + hook_pair_note(),
                     "suppressOutput": True}))
             if creds["capture_token"] and creds["endpoint"]:
                 cwd = event.get("cwd") or ""
