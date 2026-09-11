@@ -113,9 +113,11 @@ def hook_pair_note() -> str:
             handle.write(str(int(time.time())))
     except OSError:
         return ""          # cannot remember having said it, so do not say it
+    # Careful not to claim capture is working - this line also prints on a machine that is not
+    # connected yet, where it plainly is not. The claim is narrower: the Failed hook is not why.
     return ("\n\033[2mOne of Kollate's hooks is reported as Failed each session. That is expected "
-            "and capture is working: Codex cannot name a different command per operating system, "
-            "so Kollate offers both and the one this computer does not have cannot start. Shown "
+            "and nothing is wrong: Codex cannot name a different command per operating system, so "
+            "Kollate offers both and the one this computer does not have cannot start. Shown "
             "once.\033[0m")
 
 
