@@ -339,6 +339,22 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
       $repointed++
     } catch { }
   }
+  # `codex plugin add` caches each version in its own directory and leaves the previous ones
+  # behind. Codex indexes skills out of all of them, so an upgraded machine keeps offering
+  # commands from a version that is gone - seen as "that linked 0.4.44 status skill is missing
+  # locally" on an 0.4.48 install (12.09). Keep only the newest.
+  $cache = Join-Path $codexHome 'plugins\cache\kollate\kollate'
+  if (Test-Path $cache) {
+    $versions = @(Get-ChildItem $cache -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^\d+(\.\d+)*$' } |
+      Sort-Object { [version]($_.Name) })
+    if ($versions.Count -gt 1) {
+      foreach ($stale in $versions[0..($versions.Count - 2)]) {
+        Remove-Item $stale.FullName -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
   if ($repointed -gt 0) {
     $codexInstalled = $true
     $writable = @'

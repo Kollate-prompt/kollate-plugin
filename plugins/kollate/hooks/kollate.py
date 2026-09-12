@@ -382,6 +382,43 @@ def maybe_check_update() -> None:
         pass
 
 
+def codex_hooks_trusted() -> bool:
+    """Whether Codex has been told to trust Kollate's hooks on this machine.
+
+    Codex records an approval per hook in ~/.codex/config.toml as
+    [hooks.state."kollate@kollate:<file>:<event>:0:0"] trusted_hash. Reading that is the only
+    way to tell "you have not approved yet" apart from "you approved, but no session has
+    started since" - and telling somebody to go and approve hooks they just approved is exactly
+    the complaint this answers (Eyal, 12.09).
+    """
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    try:
+        with open(os.path.join(home, "config.toml"), encoding="utf-8") as handle:
+            return 'hooks.state."kollate@' in handle.read()
+    except OSError:
+        return False
+
+
+def refresh_update_cache(timeout: float = 4.0) -> None:
+    """Ask the repository for the newest version now, ignoring the 2-hour throttle.
+
+    `maybe_check_update` only ever runs inside the SessionStart worker, so a machine whose
+    hooks were never approved never refreshed it at all: status printed a months-stale number
+    as though it were fact - 0.4.27 against an installed 0.4.48 (Eyal, 12.09). An interactive
+    command can afford four seconds to be right.
+    """
+    try:
+        import urllib.request
+        with urllib.request.urlopen(
+            "https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
+            "plugins/kollate/.claude-plugin/plugin.json", timeout=timeout) as response:
+            latest = str(json.loads(response.read().decode()).get("version") or "")
+        if latest:
+            write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
+    except Exception:
+        pass       # offline, or sandboxed with no network: say nothing rather than guess
+
+
 def update_nudge() -> str:
     """A loud yellow block when a newer plugin exists, empty otherwise."""
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
@@ -711,9 +748,15 @@ def cmd_status() -> int:
         import datetime
         lines.append("Hooks last ran: "
                      + datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S"))
+    elif host() == "codex" and codex_hooks_trusted():
+        # Approved, but hooks only fire when a session starts, so nothing has run yet. The old
+        # text sent people back to /hooks to redo what they had just done.
+        lines.append("Hooks: approved, but not run yet - they fire when a session STARTS. Quit "
+                     "Codex completely and open it again; this session cannot capture itself.")
     elif host() == "codex":
-        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you approve it. Start "
-                     "Codex, run /hooks, and trust Kollate's. Nothing is captured until you do.")
+        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you approve it. Run "
+                     "/hooks in Codex's command box and trust Kollate's, then quit Codex and "
+                     "open it again. Nothing is captured until you do.")
     else:
         lines.append("Hooks: never run - restart your session; if it persists, reinstall.")
 
@@ -723,7 +766,12 @@ def cmd_status() -> int:
         import datetime
         lines.append("Last delivery activity: "
                      + datetime.datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M:%S"))
+    refresh_update_cache()
     latest = str(read_json(update_cache_path(), {}).get("latest") or "")
+    # A cached "newest" older than what is installed is stale by definition, and printing it
+    # is worse than printing nothing: it reads as "you are running something unreleased".
+    if latest and _version_tuple(latest) < _version_tuple(current_version() or ""):
+        latest = ""
     if latest:
         # Not "the marketplace": this number comes from the plugin's own repository, and the
         # app's catalogue can sit hours behind it. Calling both "the marketplace" is what makes

@@ -185,6 +185,45 @@ check("it speaks the first time the two-interpreter file is in use",
 check("and never when an installer has repointed the manifest",
       note_says("./hooks/hooks-codex-windows.json"), [False, False])
 
+print("status tells the truth about hooks and about versions")
+# Both from Eyal's 12.09 session: status told him to approve hooks he had already approved,
+# and reported "Newest version released: 0.4.27" while he was running 0.4.48.
+STATUS_CODE = """
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("k", %r)
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+print(json.dumps({
+    "trusted": k.codex_hooks_trusted(),
+    "stale_is_hidden": k._version_tuple("0.4.27") < k._version_tuple("0.4.48"),
+}))
+""" % os.path.abspath("plugins/kollate/hooks/kollate.py")
+
+def trust_seen(config_body):
+    home = tempfile.mkdtemp()
+    codex = os.path.join(home, ".codex"); os.makedirs(codex)
+    with open(os.path.join(codex, "config.toml"), "w") as h:
+        h.write(config_body)
+    env = dict(os.environ, HOME=home, CODEX_HOME=codex)
+    out = subprocess.run([sys.executable, "-c", STATUS_CODE], env=env,
+                         capture_output=True, text=True).stdout
+    return json.loads(out or "{}")
+
+check("an approved hook is recognised as approved",
+      trust_seen('[hooks.state."kollate@kollate:hooks/hooks-codex.json:stop:0:0"]\n'
+                 'trusted_hash = "sha256:abc"\n').get("trusted"), True)
+check("and somebody else's approval is not mistaken for ours",
+      trust_seen('[hooks.state."other@other:hooks/x.json:stop:0:0"]\n'
+                 'trusted_hash = "sha256:abc"\n').get("trusted"), False)
+check("a cached version older than the installed one is treated as stale",
+      trust_seen("").get("stale_is_hidden"), True)
+check("status asks the repository itself rather than trusting the cache",
+      "refresh_update_cache()" in open("plugins/kollate/hooks/kollate.py").read(), True)
+
+print("each installer prunes the version directories Codex would otherwise index")
+for _installer in ("install.sh", "install.ps1"):
+    check(f"{_installer} prunes stale plugin caches",
+          "cache" in open(_installer).read() and "kollate" in open(_installer).read(), True)
+
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))
 claude = json.load(open("plugins/kollate/.claude-plugin/plugin.json"))

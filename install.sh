@@ -273,6 +273,32 @@ for manifest in glob.glob(os.path.join(home, "**", ".codex-plugin", "plugin.json
     with open(manifest, "w", encoding="utf-8") as handle:
         json.dump(spec, handle, indent=2)
 KOLLATE_POSIX_HOOKS
+    # `codex plugin add` caches each version in its own directory and leaves the previous ones
+    # behind. Codex indexes skills out of all of them, so an upgraded machine keeps offering
+    # commands from a version that is gone - Eyal hit "that linked 0.4.44 status skill is
+    # missing locally" on 0.4.48 (12.09). Keep only the newest.
+    python3 - <<'KOLLATE_PRUNE' >>"$KOLLATE_LOG" 2>&1 || true
+import os, shutil
+
+home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+cache = os.path.join(home, "plugins", "cache", "kollate", "kollate")
+
+
+def as_version(name):
+    try:
+        return tuple(int(part) for part in name.split("."))
+    except ValueError:
+        return ()
+
+
+try:
+    versions = [n for n in os.listdir(cache) if as_version(n)]
+except OSError:
+    versions = []
+for stale in sorted(versions, key=as_version)[:-1]:
+    shutil.rmtree(os.path.join(cache, stale), ignore_errors=True)
+    print("pruned stale plugin cache: " + stale)
+KOLLATE_PRUNE
     python3 - <<'KOLLATE_WRITABLE' >>"$KOLLATE_LOG" 2>&1 || true
 import os, re, shutil, sys
 
