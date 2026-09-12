@@ -218,6 +218,15 @@ check("a cached version older than the installed one is treated as stale",
       trust_seen("").get("stale_is_hidden"), True)
 check("status asks the repository itself rather than trusting the cache",
       "refresh_update_cache()" in open("plugins/kollate/hooks/kollate.py").read(), True)
+# The python.org build of Python on macOS has no CA bundle wired into OpenSSL, so urllib
+# raises CERTIFICATE_VERIFY_FAILED against GitHub while curl succeeds. The update check was
+# the only network call in the file still using urllib, and it had been silently dead.
+_src = open("plugins/kollate/hooks/kollate.py").read()
+check("the update check goes over curl, like every other network call here",
+      "urllib" in _src.split("def fetch_latest_version")[1].split("def ")[1], False)
+check("and there is no urllib left anywhere in the update path",
+      [l.strip() for l in _src.splitlines()
+       if "urllib.request" in l and "webbrowser" not in l], [])
 
 print("each installer prunes the version directories Codex would otherwise index")
 for _installer in ("install.sh", "install.ps1"):

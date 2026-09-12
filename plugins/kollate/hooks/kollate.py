@@ -360,6 +360,29 @@ def _version_tuple(value: str):
         return ()
 
 
+LATEST_VERSION_URL = ("https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
+                      "plugins/kollate/.claude-plugin/plugin.json")
+
+
+def fetch_latest_version(timeout: float) -> str:
+    """The newest released version, over curl.
+
+    Not urllib: the python.org build of Python on macOS ships no CA bundle wired into OpenSSL,
+    so `urllib` raises CERTIFICATE_VERIFY_FAILED against GitHub while `curl` - which every other
+    network call in this file already uses - succeeds. That is why an update check could sit
+    silently dead for weeks and status kept reporting a months-old version as the newest one
+    (0.4.27 against an installed 0.4.48, Eyal 12.09).
+    """
+    try:
+        done = subprocess.run(["curl", "-fsSL", "--max-time", str(int(timeout)), LATEST_VERSION_URL],
+                              capture_output=True, text=True, timeout=timeout + 2)
+        if done.returncode != 0:
+            return ""
+        return str(json.loads(done.stdout or "{}").get("version") or "")
+    except Exception:
+        return ""
+
+
 def maybe_check_update() -> None:
     """Runs in the detached worker, never in the hook's fast path. At most every 2 hours,
     ask the marketplace what the newest version is; the next session start reads the answer
@@ -371,15 +394,9 @@ def maybe_check_update() -> None:
             return
     except (TypeError, ValueError):
         pass
-    try:
-        import urllib.request
-        with urllib.request.urlopen(
-            "https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
-            "plugins/kollate/.claude-plugin/plugin.json", timeout=5) as response:
-            latest = str(json.loads(response.read().decode()).get("version") or "")
+    latest = fetch_latest_version(5)
+    if latest:
         write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
-    except Exception:
-        pass
 
 
 def codex_hooks_trusted() -> bool:
@@ -409,16 +426,9 @@ def refresh_update_cache(timeout: float = 2.5) -> None:
     """
     if no_network():
         return     # Codex's sandbox: this cannot succeed, and waiting for it to fail is rude
-    try:
-        import urllib.request
-        with urllib.request.urlopen(
-            "https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
-            "plugins/kollate/.claude-plugin/plugin.json", timeout=timeout) as response:
-            latest = str(json.loads(response.read().decode()).get("version") or "")
-        if latest:
-            write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
-    except Exception:
-        pass       # offline: say nothing rather than guess
+    latest = fetch_latest_version(timeout)
+    if latest:
+        write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
 
 
 def update_nudge() -> str:
@@ -618,17 +628,9 @@ def cmd_update() -> int:
     # A person running /kollate:update deserves a live answer, not a cached one: ask the
     # marketplace right now. On network failure fall through and let the update attempt
     # itself be the test.
-    latest = ""
-    try:
-        import urllib.request
-        with urllib.request.urlopen(
-            "https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/"
-            "plugins/kollate/.claude-plugin/plugin.json", timeout=8) as response:
-            latest = str(json.loads(response.read().decode()).get("version") or "")
-        if latest:
-            write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
-    except Exception:
-        latest = ""
+    latest = fetch_latest_version(8)
+    if latest:
+        write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
     mine = current_version()
     if latest and mine and _version_tuple(latest) <= _version_tuple(mine):
         print(f"{KMARK}Already current: {mine} is the newest version. Nothing to do.")
