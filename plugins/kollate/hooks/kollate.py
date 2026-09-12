@@ -399,7 +399,7 @@ def codex_hooks_trusted() -> bool:
         return False
 
 
-def refresh_update_cache(timeout: float = 4.0) -> None:
+def refresh_update_cache(timeout: float = 2.5) -> None:
     """Ask the repository for the newest version now, ignoring the 2-hour throttle.
 
     `maybe_check_update` only ever runs inside the SessionStart worker, so a machine whose
@@ -407,6 +407,8 @@ def refresh_update_cache(timeout: float = 4.0) -> None:
     as though it were fact - 0.4.27 against an installed 0.4.48 (Eyal, 12.09). An interactive
     command can afford four seconds to be right.
     """
+    if no_network():
+        return     # Codex's sandbox: this cannot succeed, and waiting for it to fail is rude
     try:
         import urllib.request
         with urllib.request.urlopen(
@@ -416,7 +418,7 @@ def refresh_update_cache(timeout: float = 4.0) -> None:
         if latest:
             write_json_private(update_cache_path(), {"latest": latest, "checked_at": time.time()})
     except Exception:
-        pass       # offline, or sandboxed with no network: say nothing rather than guess
+        pass       # offline: say nothing rather than guess
 
 
 def update_nudge() -> str:
