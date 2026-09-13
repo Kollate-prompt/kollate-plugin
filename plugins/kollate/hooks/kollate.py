@@ -413,6 +413,13 @@ def update_nudge() -> str:
                 return ""
         except Exception:
             pass
+        # Codex updates from a terminal (a session's skill command has no network); Claude
+        # Code updates in place with /kollate:update. Name the real path for the tool in hand,
+        # so the nudge is actionable, not a pointer to another pointer.
+        if host() == "codex":
+            return ("\n" + KMARK + f"Kollate {latest} is out (you have {mine}). Update in a "
+                    "terminal: codex plugin marketplace upgrade kollate && codex plugin add "
+                    "kollate@kollate - then restart Codex.")
         # Calm one-liner by the client's request (28.08) - the old yellow block read as an
         # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
         return ("\n" + KMARK + f"Run {command('update')} and relaunch Claude: version " + latest)
