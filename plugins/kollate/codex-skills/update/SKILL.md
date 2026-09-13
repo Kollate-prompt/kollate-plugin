@@ -2,12 +2,10 @@
 name: update
 description: Update the Kollate plugin to the newest version
 ---
-Run `the script` with `update` and report its output in one calm line: which version it moved to, and that a new Codex session is needed to finish. Restarting after an update is ordinary - not a warning, not a surprise.
+Show the user exactly this, and nothing else:
 
-Inside a Codex session the script has no network and will answer with the exact terminal line to run instead; show that line as the answer. Do not run `codex plugin` commands yourself.
+Update Kollate by running these in a terminal (not inside Codex):
+  codex plugin marketplace upgrade kollate && codex plugin add kollate@kollate
+Then start a new Codex session.
 
-**Where the script is.** This file is `<plugin>/codex-skills/update/SKILL.md`; the script is `<plugin>/hooks/kollate.py`, two folders up. Take the absolute path you loaded this file from and build the script path from it. Do not use `${CLAUDE_PLUGIN_ROOT}` - Codex does not set it, and a command with it in fails with "can't open file '/hooks/kollate.py'". If you do not know where this file came from, the plugin is the newest folder under `~/.codex/plugins/cache/kollate/kollate/` (`%USERPROFILE%\.codex\plugins\cache\kollate\kollate\` on Windows).
-
-**Run it.** macOS/Linux: `python3 "<plugin>/hooks/kollate.py" update`. Windows: `py -3 "<plugin>\hooks\kollate.py" update`; if `py` is missing try `python`. On Windows a real Python is often installed where PATH does not reach - look in `%LOCALAPPDATA%\Programs\Python\Python3*\python.exe` before concluding it is absent, and only then install it with `winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements`.
-
-Report only what the script printed. Never mention interpreters, paths or the lookup when the command simply works. If the output says the command needs the network and gives a terminal line, show that line exactly - it is the answer, not a failure.
+Do not run any command yourself - Codex has no network inside a session, so it cannot update from here. Do not look for scripts or files.

@@ -233,10 +233,17 @@ print("Codex skills do not lean on a variable Codex never sets")
 # 13.09: every skill ran py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" - Codex leaves that
 # empty, so the command was "/hooks/kollate.py" and the model went hunting for the file.
 for _f in sorted(glob.glob("plugins/kollate/codex-skills/*/SKILL.md")):
+    _name = _f.split('/')[-2]
     _t = open(_f).read()
-    check(f"{_f.split('/')[-2]}: no ${{CLAUDE_PLUGIN_ROOT}} command",
+    check(f"{_name}: no ${{CLAUDE_PLUGIN_ROOT}} command",
           'py -3 "${CLAUDE_PLUGIN_ROOT}' in _t or 'python3 "${CLAUDE_PLUGIN_ROOT}' in _t, False)
-    check(f"{_f.split('/')[-2]}: says where the script really is", "two folders up" in _t, True)
+    # update runs nothing at all - it just prints the two terminal commands (Codex has no
+    # network inside a session), so it neither needs nor mentions the script location.
+    if _name != "update":
+        check(f"{_name}: says where the script really is", "two folders up" in _t, True)
+check("update just prints the terminal commands, runs no script",
+      "codex plugin marketplace upgrade kollate" in open("plugins/kollate/codex-skills/update/SKILL.md").read()
+      and "kollate.py" not in open("plugins/kollate/codex-skills/update/SKILL.md").read(), True)
 
 print("update on Codex prunes the way the installers do")
 with tempfile.TemporaryDirectory(prefix="kollate-") as _home:
