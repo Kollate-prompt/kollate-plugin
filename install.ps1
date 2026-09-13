@@ -3,9 +3,17 @@
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Kollate-prompt/kollate-plugin/main/install.ps1))) https://your-kollate-address
 #
 # Installs Python automatically if Windows only has the Store stubs. Merges settings.
-param([string]$Url)
+param([string]$Url, [string]$Tool)
 
 $ErrorActionPreference = "Stop"
+
+# People use one tool or the other. The Connect page's Codex tab passes 'codex' and its Claude
+# tab passes 'claude', so a person is set up for - and told about - only the tool they came for.
+# No argument (or 'both') keeps the old behaviour: set up whatever is installed.
+$Tool = "$Tool".ToLower().Trim()
+if ($Tool -notin @('', 'both', 'claude', 'codex')) { $Tool = '' }
+$wantClaude = ($Tool -in @('', 'both', 'claude'))
+$wantCodex  = ($Tool -in @('', 'both', 'codex'))
 
 # Claude Code's own installer drops claude.exe in ~\.local\bin and does NOT add it to the
 # user PATH - it prints a note telling the person to do that by hand. So every time this
@@ -55,7 +63,15 @@ function Get-CodexExe {
 }
 $codexExe = Get-CodexExe
 $hasCodex = [bool]$codexExe
-if (-not (Get-Command claude -ErrorAction SilentlyContinue) -and -not $hasCodex) {
+# Codex asked for but not installed: don't quietly install a different tool - say what to do.
+if ($Tool -eq 'codex' -and -not $hasCodex) {
+  Write-Host "Codex is not installed. Install it with 'npm i -g @openai/codex', then open"
+  Write-Host "PowerShell again and rerun the same command."
+  return
+}
+# Claude asked for (or nothing installed at all in auto mode): bring Claude Code in once.
+$claudeHere = [bool](Get-Command claude -ErrorAction SilentlyContinue)
+if (($Tool -eq 'claude' -and -not $claudeHere) -or (($Tool -in @('', 'both')) -and -not $claudeHere -and -not $hasCodex)) {
   Write-Host "-> Installing Claude Code (one time)"
   irm https://claude.ai/install.ps1 | iex
   Sync-Path
@@ -270,7 +286,7 @@ $cleancode | & $py -
 # Every step from here to the Codex section speaks to the `claude` CLI. On a machine that only
 # runs Codex there is nothing for them to talk to, and failing here used to `return` before the
 # Codex install was ever reached - so a Codex-only Windows user got nothing at all.
-if (Get-Command claude -ErrorAction SilentlyContinue) {
+if ($wantClaude -and (Get-Command claude -ErrorAction SilentlyContinue)) {
   Write-Host "-> Adding the Kollate marketplace"
   if ((Invoke-Claude plugin marketplace add Kollate-prompt/kollate-plugin) -ne 0) {
     Write-Host "The marketplace could not be added. Full detail: $KollateLog"
@@ -325,7 +341,7 @@ $pycode | & $py -
 # everything else - so nothing here needs to be edited per operating system. Codex re-syncs
 # the marketplace from git whenever it changes, which is why no edit could ever have stuck.
 $codexInstalled = $false
-if ($codexExe) {
+if ($wantCodex -and $codexExe) {
   Write-Host "-> Codex found - installing there too"
   # Adding a marketplace that is already configured is not an error worth stopping for.
   & $codexExe plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin 2>&1 | Out-Null
@@ -400,34 +416,45 @@ with open(path, "w", encoding="utf-8") as handle:
 }
 
 Write-Host ""
+
+# Connect as part of the install - no reason to make it a separate manual step for either tool.
+# connect opens the browser, signs in, and writes the credential to the shared location both
+# surfaces read, so one sign-in serves Claude Code and Codex alike.
+$connectPy = $null
+if ($codexInstalled) {
+  $codexHomeOut = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
+  $connectPy = Get-ChildItem "$codexHomeOut\plugins\cache\kollate\kollate" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d+(\.\d+)*$' } | Sort-Object { [version]$_.Name } | Select-Object -Last 1 |
+    ForEach-Object { Join-Path $_.FullName 'hooks\kollate.py' }
+}
+if (-not $connectPy -and $wantClaude) {
+  $connectPy = Get-ChildItem "$HOME\.claude\plugins" -Recurse -Filter kollate.py -ErrorAction SilentlyContinue |
+    Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+}
+$connected = $false
+if ($connectPy -and (Test-Path $connectPy)) {
+  Write-Host "-> Connecting this computer (a browser will open to sign in)"
+  & $py $connectPy connect
+  $connected = ($LASTEXITCODE -eq 0)
+}
+
+Write-Host ""
 Write-Host "  Installed."
 Write-Host ""
-# Someone here for Codex alone should not be told to restart a program they do not have.
-if (Get-Command claude -ErrorAction SilentlyContinue) {
-  Write-Host "  Two things left, and they are both yours:"
-  Write-Host "    1. Close Claude Code completely and open it again."
-  Write-Host "    2. Run:  /kollate:connect"
+if (-not $connected) {
+  Write-Host "  Connection is not finished. When ready, run this in this window:"
+  Write-Host "         $py `"$connectPy`" connect"
+  Write-Host ""
+}
+# People use one tool or the other - tell each person only about the tool they set up.
+if ($wantClaude -and (Get-Command claude -ErrorAction SilentlyContinue)) {
+  Write-Host "  Claude Code: close it completely and open it again. That's it."
   Write-Host ""
 }
 if ($codexInstalled) {
-  $codexHomeOut = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
-  $kollatePy = Get-ChildItem "$codexHomeOut\plugins\cache\kollate\kollate" -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '^\d+(\.\d+)*$' } | Sort-Object { [version]$_.Name } | Select-Object -Last 1 |
-    ForEach-Object { Join-Path $_.FullName 'hooks\kollate.py' }
-  if (-not $kollatePy) { $kollatePy = "$codexHomeOut\plugins\cache\kollate\kollate\<version>\hooks\kollate.py" }
-  Write-Host "  In Codex, two things, and nothing is captured until both are done:"
-  Write-Host ""
-  Write-Host "    1. Quit Codex completely and open it again. It will say 'Hooks need review' -"
-  Write-Host "       choose 'Trust all and continue'. (Missed it? Type /hooks and trust Kollate's,"
-  Write-Host "       then quit and open Codex once more.)"
-  Write-Host ""
-  Write-Host "    2. Connect from THIS window - Codex has no network inside a session, so this"
-  Write-Host "       one command cannot run in there:"
-  Write-Host ""
-  Write-Host "         py -3 `"$kollatePy`" connect"
-  Write-Host ""
-  Write-Host "       One connection serves Claude Code and Codex alike; if you already connected,"
-  Write-Host "       skip this."
+  Write-Host "  Codex: quit it completely and open it again. It will say 'Hooks need review' -"
+  Write-Host "  choose 'Trust all and continue'. (Missed it? Type /hooks, trust Kollate's, then quit"
+  Write-Host "  and reopen Codex once more.) Nothing is captured from Codex until you do."
   Write-Host ""
   Write-Host "  Inside Codex the commands start with a dollar sign: type `$koll and pick from the list -"
   Write-Host "  `$kollate:status shows whether the hooks have ever actually run, `$kollate:pause stops"

@@ -17,6 +17,19 @@ case "$URL" in
   https://*) ;;
   *) echo "The address must start with https:// - got: $URL" >&2; exit 2 ;;
 esac
+URL="${URL%/}"
+
+# People use one tool or the other. The Connect page's Codex tab passes 'codex' and its Claude
+# tab passes 'claude', so a person is set up for - and told about - only the tool they came for.
+# No second argument (or 'both') keeps the old behaviour: set up whatever is installed.
+TOOL="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+case "$TOOL" in claude|codex|both) ;; *) TOOL="" ;; esac
+want_claude=0; want_codex=0
+case "$TOOL" in
+  claude) want_claude=1 ;;
+  codex)  want_codex=1 ;;
+  *)      want_claude=1; want_codex=1 ;;
+esac
 
 # Claude Code itself is a dependency like any other. Refusing here and telling someone to go
 # run a second command is the one step that turns a one-liner back into a support thread.
@@ -27,7 +40,14 @@ esac
 if ! command -v claude >/dev/null || ! command -v codex >/dev/null; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
-if ! command -v claude >/dev/null && ! command -v codex >/dev/null; then
+# Codex asked for but not installed: say what to do rather than installing a different tool.
+if [ "$TOOL" = "codex" ] && ! command -v codex >/dev/null; then
+  echo "Codex is not installed. Install it with 'npm i -g @openai/codex', then rerun this command." >&2
+  exit 1
+fi
+# Claude asked for (or nothing installed at all in auto mode): bring Claude Code in once.
+if { [ "$TOOL" = "claude" ] && ! command -v claude >/dev/null; } || \
+   { [ -z "$TOOL" ] && ! command -v claude >/dev/null && ! command -v codex >/dev/null; }; then
   echo "→ Installing Claude Code (one time)"
   curl -fsSL https://claude.ai/install.sh | bash
   export PATH="$HOME/.local/bin:$PATH"
@@ -55,7 +75,7 @@ run_claude() {
   return $rc
 }
 
-if command -v claude >/dev/null; then
+if [ "$want_claude" = 1 ] && command -v claude >/dev/null; then
 echo "→ Clearing any previous Kollate marketplace"
 python3 - <<'KOLLATE_CLEAN'
 import json, os, platform, shutil, sys, time, urllib.parse
@@ -245,7 +265,7 @@ KOLLATE_SHARED
 # Codex has its own marketplace, its own plugin store and its own copy of the manifests in
 # this same repository, so this is two commands rather than surgery on anybody's hooks.json.
 CODEX_INSTALLED=""
-if command -v codex >/dev/null; then
+if [ "$want_codex" = 1 ] && command -v codex >/dev/null; then
   echo "→ Codex found - installing there too"
   # Adding a marketplace that is already configured is not an error worth stopping for.
   codex plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin >>"$KOLLATE_LOG" 2>&1 || true
@@ -324,41 +344,42 @@ KOLLATE_WRITABLE
   fi
 fi
 
-echo
-echo "  Installed."
 
-if command -v claude >/dev/null; then
-cat <<DONE
-
-  In Claude Code, two things left, and they are both yours:
-
-    1. Quit Claude Code completely and open it again.
-       Plugins load at startup - a session already running will not see this one.
-
-    2. Run:  /kollate:connect
-
-  Your browser opens the sign-in you already use. Approve it, and this machine is
-  connected. You are never shown a key and never edit a file.
-
-DONE
+# Connect as part of the install - no reason to make it a separate manual step for either tool.
+# connect opens the browser, signs in, and writes the credential to the shared location both
+# surfaces read, so one sign-in serves Claude Code and Codex alike.
+CONNECT_PY=""
+if [ -n "$CODEX_INSTALLED" ]; then
+  CONNECT_PY=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/kollate/kollate/*/hooks/kollate.py 2>/dev/null | sort -V | tail -1)
+fi
+if [ -z "$CONNECT_PY" ] && [ "$want_claude" = 1 ]; then
+  CONNECT_PY=$(find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins" -name kollate.py 2>/dev/null | sort | tail -1)
+fi
+CONNECTED=""
+if [ -n "$CONNECT_PY" ] && [ -f "$CONNECT_PY" ]; then
+  echo
+  echo "→ Connecting this computer (a browser will open to sign in)"
+  if python3 "$CONNECT_PY" connect; then CONNECTED="yes"; fi
 fi
 
+echo
+echo "  Installed."
+echo
+if [ -z "$CONNECTED" ] && [ -n "$CONNECT_PY" ]; then
+  echo "  Connection is not finished. When ready, run this in this terminal:"
+  echo "         python3 \"$CONNECT_PY\" connect"
+  echo
+fi
+# People use one tool or the other - tell each person only about the tool they set up.
+if [ "$want_claude" = 1 ] && command -v claude >/dev/null; then
+  echo "  Claude Code: quit it completely and open it again. That's it - plugins load at startup."
+  echo
+fi
 if [ -n "$CODEX_INSTALLED" ]; then
-KOLLATE_CODEX_PY=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/kollate/kollate/*/hooks/kollate.py 2>/dev/null | sort -V | tail -1)
 cat <<CODEX_DONE
-  In Codex, two things, and nothing is captured until both are done:
-
-    1. Quit Codex completely and open it again. It will say "Hooks need review" -
-       choose "Trust all and continue". (Missed it? Type /hooks and trust Kollate's,
-       then quit and open Codex once more.)
-
-    2. Connect from THIS terminal - Codex has no network inside a session, so this
-       one command cannot run in there:
-
-         python3 "${KOLLATE_CODEX_PY:-$HOME/.codex/plugins/cache/kollate/kollate/<version>/hooks/kollate.py}" connect
-
-       One connection serves Claude Code and Codex alike; if you already connected,
-       skip this.
+  Codex: quit it completely and open it again. It will say "Hooks need review" -
+  choose "Trust all and continue". (Missed it? Type /hooks, trust Kollate's, then quit
+  and open Codex once more.) Nothing is captured from Codex until you do.
 
   Inside Codex the commands start with a dollar sign: type \$koll and pick from the list -
   \$kollate:status shows whether the hooks have ever actually run, \$kollate:pause stops
