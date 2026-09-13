@@ -599,7 +599,7 @@ def cmd_pause(scope: str) -> int:
         print(KMARK + f"Pause what? One of: session · 3h · today · week · dir (this directory)   (or {command('stop')})")
         return 1
     write_json_private(pause_path(), state)
-    print(message + " Paused turns are dropped, not queued - they will not arrive later. "
+    print(KMARK + message + " Paused turns are dropped, not queued - they will not arrive later. "
           + f"Turn capture back on with {command('resume')}.")
     return 0
 
