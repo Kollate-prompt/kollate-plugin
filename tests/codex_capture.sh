@@ -128,17 +128,22 @@ check("the per-OS files are gone, so nothing can point at them",
       [n for n in os.listdir("plugins/kollate/hooks") if n.startswith("hooks-codex-")], [])
 
 print("kollate-hook.cmd is one file for both systems")
-# sh: line 1 is the shebang, line 2 starts with ':' (a no-op) and execs Python, so line 3 is
-# never reached. cmd: line 1 fails harmlessly ('#!' is not a command), line 2 is a label
-# (leading ':'), line 3 runs. Verified by Codex itself on the Windows bench, 13.09.
+# sh: line 1 is ":;" (a no-op) then execs Python, so line 2 is never reached. cmd: line 1
+# starts with ":" so cmd reads it as a label and skips it, then runs line 2. Neither errors.
+# Codex runs the hook through a shell on both systems (sh -c on POSIX), so no shebang is
+# needed - and a "#!/bin/sh" line made cmd.exe error and Codex report Stop Failed (bench,
+# 13.09). Verified end to end on Mac and the Windows bench with 0.4.57.
 _cmd = "plugins/kollate/hooks/kollate-hook.cmd"
 _lines = open(_cmd, newline="").read().split("\n")
 check("executable bit, kept by git and by Codex's copies", os.access(_cmd, os.X_OK), True)
-check("shebang first", _lines[0], "#!/bin/sh")
-check("the shell line is a cmd label", _lines[1].startswith(": ;"), True)
-check("the shell line hands over to Python and never returns", "exec python" in _lines[1], True)
+# No "#!/bin/sh" first line: cmd.exe cannot run it and errors, which made Codex report the
+# Stop hook Failed on Windows (bench, 13.09). ":;" is a no-op to sh and a label to cmd, so
+# neither errors. sh reaches the exec; cmd skips the label and runs line 2.
+check("the first line is the sh/label polyglot, not a shebang", _lines[0].startswith(":;"), True)
+check("the sh line hands over to Python and never returns", "exec python" in _lines[0], True)
+check("no shebang anywhere - it would error on cmd.exe", any("#!" in l for l in _lines), False)
 check("the cmd line is silent and finds the script beside itself",
-      _lines[2].startswith("@py -3") and "%~dp0kollate.py" in _lines[2] and "%*" in _lines[2], True)
+      _lines[1].startswith("@py -3") and "%~dp0kollate.py" in _lines[1] and "%*" in _lines[1], True)
 check("LF endings only - CRLF would put a \\r in the sh line", any("\r" in l for l in _lines), False)
 if os.name != "nt":
     with tempfile.TemporaryDirectory() as _d:
@@ -146,9 +151,12 @@ if os.name != "nt":
         import shutil as _sh
         _sh.copy(_cmd, _p); _sh.copymode(_cmd, os.path.join(_p, "kollate-hook.cmd"))
         open(os.path.join(_p, "kollate.py"), "w").write("import sys; print('ARGS', sys.argv[1:])")
-        _r = subprocess.run([os.path.join(_p, "kollate-hook.cmd"), "capture"],
+        # Codex invokes the hook through a shell, not a bare execve - so does this, and a
+        # bare execve would fail ENOEXEC without a shebang (which is the point).
+        _r = subprocess.run(["sh", "-c",
+                             '%s capture' % os.path.join(_p, "kollate-hook.cmd")],
                             capture_output=True, text=True, input="{}")
-        check("run directly, no shell in front, it reaches Python with the verb",
+        check("through a shell it reaches Python with the verb",
               (_r.returncode, _r.stdout.strip()), (0, "ARGS ['capture']"))
 
 print("status tells the truth about hooks and about versions")
