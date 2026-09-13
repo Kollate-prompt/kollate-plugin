@@ -574,7 +574,7 @@ def cmd_pause(scope: str) -> int:
         message = "Capture paused for a week."
     elif scope in ("stop", "forever", "off"):
         state["until"] = None
-        message = f"Capture stopped on this machine. {command('resume')} turns it back on."
+        message = "Capture stopped on this machine."
     elif scope in ("dir", "directory", "this directory", "here"):
         cwd = os.getcwd()
         mark_dir(cwd, excluded=True)
@@ -586,7 +586,8 @@ def cmd_pause(scope: str) -> int:
         print(KMARK + f"Pause what? One of: session · 3h · today · week · dir (this directory)   (or {command('stop')})")
         return 1
     write_json_private(pause_path(), state)
-    print(message + " Paused turns are dropped, not queued - they will not arrive later.")
+    print(message + " Paused turns are dropped, not queued - they will not arrive later. "
+          + f"Turn capture back on with {command('resume')}.")
     return 0
 
 
@@ -1476,6 +1477,14 @@ def network_refused(verb: str) -> int:
     """
     script = os.path.abspath(__file__)
     print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
+    if verb == "update":
+        # Updating means running codex's own plugin commands, which is what the terminal line
+        # below does. Name them too, so it matches what the /plugins screen leads people to expect.
+        print("Update from a terminal (not inside Codex):")
+        print("  codex plugin marketplace upgrade kollate && codex plugin add kollate@kollate")
+        print("Then start a new Codex session. Re-running the install command does the same and "
+              "also tidies old versions.")
+        return 1
     print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
           + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
     if verb == "connect":
