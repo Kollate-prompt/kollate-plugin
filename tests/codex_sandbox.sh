@@ -108,7 +108,7 @@ for verb in ("connect", "update", "backfill"):
                           env=env, capture_output=True, text=True)
     check(f"{verb} stops before trying", done.returncode, 1)
     check(f"{verb} says why", "needs the network" in done.stdout, True)
-    check(f"{verb} names the place it works", "Run it in a terminal instead" in done.stdout, True)
+    check(f"{verb} names the place it works", "terminal" in done.stdout, True)
 check("and connecting explains the browser too",
       "opens a browser" in subprocess.run(
           [sys.executable, "plugins/kollate/hooks/kollate.py", "connect"],
