@@ -35,7 +35,26 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 # Unless they are here for Codex. Someone who already runs Codex and not Claude Code should not
 # have a second agent installed on their machine as a side effect of capturing the one they do
 # use, so the bootstrap only fires when neither is present - the same rule install.sh follows.
-$hasCodex = [bool](Get-Command codex -ErrorAction SilentlyContinue)
+# Invoke Codex without the PowerShell .ps1 shim. npm installs codex.ps1 next to codex.cmd, and
+# `& codex` resolves to the .ps1, which a default ExecutionPolicy refuses to run ("running
+# scripts is disabled on this system") - so the entire Codex install died right after Claude
+# Code's half had succeeded (13.09, Windows bench). codex.cmd is a batch file, not a PowerShell
+# script, and runs regardless of ExecutionPolicy.
+function Get-CodexExe {
+  foreach ($name in 'codex.cmd', 'codex.exe') {
+    $c = Get-Command $name -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+  }
+  $any = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($any) {
+    $sibling = Join-Path (Split-Path $any.Source) 'codex.cmd'
+    if (Test-Path $sibling) { return $sibling }
+    return $any.Source
+  }
+  return $null
+}
+$codexExe = Get-CodexExe
+$hasCodex = [bool]$codexExe
 if (-not (Get-Command claude -ErrorAction SilentlyContinue) -and -not $hasCodex) {
   Write-Host "-> Installing Claude Code (one time)"
   irm https://claude.ai/install.ps1 | iex
@@ -306,12 +325,12 @@ $pycode | & $py -
 # everything else - so nothing here needs to be edited per operating system. Codex re-syncs
 # the marketplace from git whenever it changes, which is why no edit could ever have stuck.
 $codexInstalled = $false
-if (Get-Command codex -ErrorAction SilentlyContinue) {
+if ($codexExe) {
   Write-Host "-> Codex found - installing there too"
   # Adding a marketplace that is already configured is not an error worth stopping for.
-  & codex plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin 2>&1 | Out-Null
-  & codex plugin marketplace upgrade kollate 2>&1 | Out-Null
-  & codex plugin add kollate@kollate 2>&1 | Out-Null
+  & $codexExe plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin 2>&1 | Out-Null
+  & $codexExe plugin marketplace upgrade kollate 2>&1 | Out-Null
+  & $codexExe plugin add kollate@kollate 2>&1 | Out-Null
   $codexAdded = ($LASTEXITCODE -eq 0)
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
   # `codex plugin add` caches each version in its own directory and leaves the previous ones
