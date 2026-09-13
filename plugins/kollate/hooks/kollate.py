@@ -1483,15 +1483,16 @@ def network_refused(verb: str) -> int:
     Better to say so before trying, and name the place it does work.
     """
     script = os.path.abspath(__file__)
-    print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
     if verb == "update":
-        # Updating means running codex's own plugin commands, which is what the terminal line
-        # below does. Name them too, so it matches what the /plugins screen leads people to expect.
-        print("Update from a terminal (not inside Codex):")
+        # A skill's command can never update from inside a session (no network here), so
+        # printing the two terminal commands IS the whole job - not a failure. Say it plainly
+        # and exit 0, or Codex paints a red x on a command that did exactly what it should.
+        print(f"{KMARK}Update Kollate by running these in a terminal (not inside Codex):")
         print("  codex plugin marketplace upgrade kollate && codex plugin add kollate@kollate")
         print("Then start a new Codex session. Re-running the install command does the same and "
               "also tidies old versions.")
-        return 1
+        return 0
+    print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
     print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
           + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
     if verb == "connect":
