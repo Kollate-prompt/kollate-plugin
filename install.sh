@@ -266,12 +266,14 @@ import json, os
 home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
 manifests = []
 for root, dirs, files in os.walk(home):
-    if os.path.basename(root) == ".codex-plugin" and "plugin.json" in files and "kollate" in root:
+    if os.path.basename(root) == ".codex-plugin" and "plugin.json" in files:
         manifests.append(os.path.join(root, "plugin.json"))
 for manifest in manifests:
     with open(manifest, encoding="utf-8") as handle:
         spec = json.load(handle)
-    if spec.get("hooks") == "./hooks/hooks-codex-posix.json":
+    # Match on the manifest, not the path: a CODEX_HOME whose path happens to contain
+    # "kollate" would otherwise repoint every other plugin too.
+    if spec.get("name") != "kollate" or spec.get("hooks") == "./hooks/hooks-codex-posix.json":
         continue
     spec["hooks"] = "./hooks/hooks-codex-posix.json"
     with open(manifest, "w", encoding="utf-8") as handle:

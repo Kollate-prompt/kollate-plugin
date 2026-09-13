@@ -239,17 +239,22 @@ print("install.sh repoints the copy Codex actually loads - the one under a hidde
 import re, subprocess, tempfile
 _sh = open("install.sh").read()
 _block = re.search(r"<<'KOLLATE_POSIX_HOOKS'[^\n]*\n(.*?)\nKOLLATE_POSIX_HOOKS", _sh, re.S).group(1)
-with tempfile.TemporaryDirectory() as _home:
+with tempfile.TemporaryDirectory(prefix="kollate-") as _home:
     _paths = [os.path.join(_home, "plugins", "cache", "kollate", "kollate", "0.0.1", ".codex-plugin"),
               os.path.join(_home, ".tmp", "marketplaces", "kollate", "plugins", "kollate", ".codex-plugin")]
     for _d in _paths:
         os.makedirs(_d)
         json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_d, "plugin.json"), "w"))
+    _other = os.path.join(_home, "plugins", "cache", "openai", "templates", "0.1.0", ".codex-plugin")
+    os.makedirs(_other)
+    json.dump({"name": "templates"}, open(os.path.join(_other, "plugin.json"), "w"))
     subprocess.run([sys.executable, "-c", _block], env={**os.environ, "CODEX_HOME": _home}, check=True,
                    capture_output=True)
     for _d in _paths:
         check(f"repointed {_d.split(_home)[1]}",
               json.load(open(os.path.join(_d, "plugin.json")))["hooks"], "./hooks/hooks-codex-posix.json")
+    check("and leaves other plugins alone even when the home path says kollate",
+          json.load(open(os.path.join(_other, "plugin.json"))), {"name": "templates"})
 
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))
