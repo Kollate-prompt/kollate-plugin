@@ -107,6 +107,12 @@ def data_dirs() -> list:
     dirs = [plugin_dir(), shared_dir()]
     config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
     dirs += glob.glob(os.path.join(config, "plugins", "data", "*kollate*"))
+    # Codex writes its watermarks under ~/.codex/plugins/data, not ~/.claude - and a Codex
+    # skill's shell has no CLAUDE_PLUGIN_DATA, so plugin_dir() alone misses it. Without this,
+    # $kollate:status read the Claude dirs and reported a stale "last delivery" while the Codex
+    # hook was delivering fine (13.09: showed 14:54 when the true last delivery was 14:58).
+    codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    dirs += glob.glob(os.path.join(codex_home, "plugins", "data", "*kollate*"))
     return list(dict.fromkeys(dirs))
 
 

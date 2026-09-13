@@ -181,6 +181,20 @@ with tempfile.TemporaryDirectory() as _d:
         del os.environ["CLAUDE_PLUGIN_DATA"]; del os.environ["CLAUDE_PLUGIN_ROOT"]
         importlib.reload(kollate)
 
+print("status reads the Codex data dir, where the Codex hook actually delivers")
+# 13.09: $kollate:status read ~/.claude/plugins/data but not ~/.codex/plugins/data, so it
+# reported a stale "last delivery" while the Codex hook was delivering fine to the codex dir.
+with tempfile.TemporaryDirectory(prefix="kollate-") as _ch:
+    _cx = os.path.join(_ch, "plugins", "data", "kollate-kollate")
+    os.makedirs(_cx)
+    json.dump({"codex:test-sid": {"offset": 99, "next_seq": 3}},
+              open(os.path.join(_cx, "delivered.json"), "w"))
+    os.environ["CODEX_HOME"] = _ch
+    import importlib; importlib.reload(kollate)
+    _dirs = [os.path.realpath(d) for d in kollate.data_dirs()]
+    check("data_dirs() includes the codex plugins/data dir", os.path.realpath(_cx) in _dirs, True)
+    del os.environ["CODEX_HOME"]; importlib.reload(kollate)
+
 print("status tells the truth about hooks and about versions")
 # Both from Eyal's 12.09 session: status told him to approve hooks he had already approved,
 # and reported "Newest version released: 0.4.27" while he was running 0.4.48.
