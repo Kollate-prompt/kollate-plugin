@@ -252,33 +252,6 @@ if command -v codex >/dev/null; then
   codex plugin marketplace upgrade kollate >>"$KOLLATE_LOG" 2>&1 || true
   if codex plugin add kollate@kollate >>"$KOLLATE_LOG" 2>&1; then
     CODEX_INSTALLED="yes"
-    # The shipped hooks file has to serve a plugin-screen install on either system, so it
-    # carries both interpreters and lets the wrong one fail visibly. Nobody who ran this
-    # script needs to see that: point the installed copy at the POSIX-only file, exactly as
-    # install.ps1 points a Windows install at its own. `marketplace upgrade` undoes this,
-    # which is why rerunning this command is the documented repair.
-    python3 - <<'KOLLATE_POSIX_HOOKS' >>"$KOLLATE_LOG" 2>&1 || true
-import json, os
-
-# os.walk, not glob("**"): glob skips hidden directories, and the copy Codex actually loads
-# lives under ~/.codex/.tmp/marketplaces/. The first version of this used glob and repointed
-# only the cache copy - the live one kept the two-interpreter file (Gal's Mac, 13.09).
-home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-manifests = []
-for root, dirs, files in os.walk(home):
-    if os.path.basename(root) == ".codex-plugin" and "plugin.json" in files:
-        manifests.append(os.path.join(root, "plugin.json"))
-for manifest in manifests:
-    with open(manifest, encoding="utf-8") as handle:
-        spec = json.load(handle)
-    # Match on the manifest, not the path: a CODEX_HOME whose path happens to contain
-    # "kollate" would otherwise repoint every other plugin too.
-    if spec.get("name") != "kollate" or spec.get("hooks") == "./hooks/hooks-codex-posix.json":
-        continue
-    spec["hooks"] = "./hooks/hooks-codex-posix.json"
-    with open(manifest, "w", encoding="utf-8") as handle:
-        json.dump(spec, handle, indent=2)
-KOLLATE_POSIX_HOOKS
     # `codex plugin add` caches each version in its own directory and leaves the previous ones
     # behind. Codex indexes skills out of all of them, so an upgraded machine keeps offering
     # commands from a version that is gone - Eyal hit "that linked 0.4.44 status skill is

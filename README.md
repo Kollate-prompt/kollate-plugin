@@ -123,25 +123,15 @@ silently — no prompt, no error, and no `hook:` line at all. `codex_capture.sh`
 that reason. Changing one is a release note plus a `/hooks` re-approval for every installed
 machine.
 
-**Windows runs the hook without a shell.** On macOS and Linux Codex hands the command to a
-shell, so an `A || B` interpreter probe falls through to whichever Python exists. On Windows it
-does not: the chain is never executed and Codex reports the hook as Failed, so nothing is
-captured.
-
-**Three hooks files, because Codex has no per-OS field.** A `command_windows` key and a per-OS
-object in the manifest's `hooks` value were both tested on Windows 11 and silently ignored
-(2026-09-11), and Windows cannot execute `kollate.py` directly. So:
-
-| file | who points at it | shape |
-|---|---|---|
-| `hooks-codex.json` | the plugin manifest — what a **plugin-screen install** gets, on either system | two entries per hook, `python3` and `py -3`; each system completes one and reports the other Failed |
-| `hooks-codex-posix.json` | `install.sh` | one `python3 || python` command |
-| `hooks-codex-windows.json` | `install.ps1` | one `py -3` command |
-
-The visible Failed line is the price of the plugin-screen route working on Windows at all; anybody
-who ran an installer never sees it, because both installers repoint the installed copy. Rerun the
-installer after `codex plugin marketplace upgrade` — an upgrade restores the plugin's own manifest
-choice.
+**One hook file, one command per event, the same bytes on every system.** Codex has no per-OS
+field (`command_windows` and a per-OS object in the manifest were both tested on Windows 11 and
+silently ignored, 2026-09-11); it runs a hook command through a shell on macOS and Linux but not
+on Windows, so an `A || B` interpreter probe never executes there; and it re-syncs the marketplace
+from git whenever the repository changes, so a per-OS file chosen by an installer was reverted by
+the next push (13.09). The command is therefore `hooks/kollate-hook.cmd` — a file Windows runs as a
+batch script and everything else runs through its `#!/bin/sh` line — which finds `kollate.py`
+beside itself and hands over to `py -3` or `python3`. No Failed line, nothing to repoint, and the
+plugin-screen route and the installers install the identical thing.
 
 **Codex sandboxes a skill's command; it does not sandbox a hook.** Capture is unaffected —
 hooks run with full access, which is how delivery works at all. The commands are another

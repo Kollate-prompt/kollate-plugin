@@ -301,20 +301,10 @@ $pycode | & $py -
 # Codex keeps its own marketplace and its own copy of the manifests in this same repository,
 # so installing there is two commands rather than surgery on anybody's hooks.json.
 #
-# One thing differs on Windows and has to be repaired here. Codex runs a hook command through
-# a shell on macOS and Linux, and NOT on Windows: the `A || B || C` interpreter probe that the
-# POSIX manifest relies on is never executed here, and Codex reports the hook as Failed. The
-# Windows manifest is therefore a single `py -3` invocation with no shell operators, and this
-# is where the installed copy gets pointed at it. Rerun this installer after
-# `codex plugin marketplace upgrade` - an upgrade restores the plugin's own manifest choice.
-#
-# Which copy, though, is not ours to predict. 0.152 ran the plugin out of
-# `plugins\cache\kollate\kollate\<version>`; 0.154 runs it out of
-# `.tmp\marketplaces\kollate\plugins\kollate`, and patching only the first left Windows
-# loading the POSIX manifest and capturing nothing, silently - the exact failure this file
-# exists to prevent, reintroduced by a version bump. So every copy under CODEX_HOME is
-# repointed, and the count is asserted rather than assumed: zero means Codex has moved the
-# plugin again and the person needs to hear so, not be told "Installed".
+# The hook file the plugin ships (hooks-codex.json) names one command per event -
+# hooks/kollate-hook.cmd, a file that is a batch script to Windows and a shell script to
+# everything else - so nothing here needs to be edited per operating system. Codex re-syncs
+# the marketplace from git whenever it changes, which is why no edit could ever have stuck.
 $codexInstalled = $false
 if (Get-Command codex -ErrorAction SilentlyContinue) {
   Write-Host "-> Codex found - installing there too"
@@ -322,23 +312,8 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
   & codex plugin marketplace add https://github.com/Kollate-prompt/kollate-plugin 2>&1 | Out-Null
   & codex plugin marketplace upgrade kollate 2>&1 | Out-Null
   & codex plugin add kollate@kollate 2>&1 | Out-Null
+  $codexAdded = ($LASTEXITCODE -eq 0)
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
-  $manifests = @(Get-ChildItem $codexHome -Recurse -Force -Filter 'plugin.json' -ErrorAction SilentlyContinue |
-    Where-Object { $_.DirectoryName -like '*\.codex-plugin' -and $_.FullName -like '*kollate*' })
-  $repointed = 0
-  foreach ($m in $manifests) {
-    try {
-      $spec = Get-Content $m.FullName -Raw | ConvertFrom-Json
-      if ($spec.name -ne 'kollate') { continue }
-      $spec.hooks = './hooks/hooks-codex-windows.json'
-      # Not Set-Content -Encoding UTF8: on Windows PowerShell 5.1 that writes a BOM, and a
-      # plugin.json beginning EF BB BF is not JSON as far as Codex is concerned. It drops the
-      # plugin's hooks and says nothing, which looks exactly like a working install.
-      [System.IO.File]::WriteAllText($m.FullName, ($spec | ConvertTo-Json -Depth 20),
-                                     (New-Object System.Text.UTF8Encoding $false))
-      $repointed++
-    } catch { }
-  }
   # `codex plugin add` caches each version in its own directory and leaves the previous ones
   # behind. Codex indexes skills out of all of them, so an upgraded machine keeps offering
   # commands from a version that is gone - seen as "that linked 0.4.44 status skill is missing
@@ -355,7 +330,7 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
     }
   }
 
-  if ($repointed -gt 0) {
+  if ($codexAdded) {
     $codexInstalled = $true
     $writable = @'
 import os, re, shutil, sys

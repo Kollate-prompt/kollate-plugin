@@ -85,42 +85,6 @@ def configured_endpoint() -> str:
     return "https://app.kollate.ai"
 
 
-def hook_pair_note() -> str:
-    """One line, once per machine, explaining the hook Codex reports as Failed.
-
-    Codex has no way to name a different command per operating system - a `command_windows` key
-    and a per-OS manifest value were both tested on Windows 11 and silently ignored - so the
-    shipped hooks file names both interpreters and lets the one this machine lacks fail. Codex
-    prints that as "Failed" beside the one that worked, which reads as a broken install to
-    someone who has no reason to know any of the above.
-
-    Only the plugin-screen and `codex plugin add` routes see it; both installers repoint the
-    installed copy at a single command. So this speaks only when the manifest still names the
-    two-interpreter file, and only the first time on a machine.
-    """
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    if not root:
-        return ""
-    spec = read_json(os.path.join(root, ".codex-plugin", "plugin.json"), {})
-    if spec.get("hooks") != "./hooks/hooks-codex.json":
-        return ""
-    marker = os.path.join(plugin_dir(), "hook-pair-note")
-    if os.path.exists(marker):
-        return ""
-    try:
-        os.makedirs(plugin_dir(), exist_ok=True)
-        with open(marker, "w") as handle:
-            handle.write(str(int(time.time())))
-    except OSError:
-        return ""          # cannot remember having said it, so do not say it
-    # Careful not to claim capture is working - this line also prints on a machine that is not
-    # connected yet, where it plainly is not. The claim is narrower: the Failed hook is not why.
-    return ("\n\033[2mOne of Kollate's hooks is reported as Failed each session. That is expected "
-            "and nothing is wrong: Codex cannot name a different command per operating system, so "
-            "Kollate offers both and the one this computer does not have cannot start. Shown "
-            "once.\033[0m")
-
-
 def watermark_path() -> str:
     return os.path.join(plugin_dir(), "delivered.json")
 
@@ -739,44 +703,24 @@ def codex_update() -> int:
                   + (result.stderr or result.stdout).strip()[:300])
             print("Update by re-running the install command from the Connect page instead.")
             return 1
-    repointed, pruned = tidy_codex_install()
-    print(f"Updated. Hook file set for this operating system on {repointed} manifest(s); "
-          f"{pruned} old version folder(s) removed.")
+    pruned = tidy_codex_install()
+    print(f"Updated; {pruned} old version folder(s) removed.")
     print("Start a new Codex session to finish - a running one keeps the code it loaded.")
     return 0
 
 
-def tidy_codex_install() -> tuple:
-    """What install.sh / install.ps1 do after `codex plugin add`, from Python, for both OSes."""
+def tidy_codex_install() -> int:
+    """What the installers do after `codex plugin add`: drop the older version folders, whose
+    skills Codex would otherwise keep indexing (two of every command, 12.09)."""
     import glob, shutil as _shutil
     home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-    wanted = ("./hooks/hooks-codex-windows.json" if os.name == "nt"
-              else "./hooks/hooks-codex-posix.json")
-    pruned = 0
     cache = os.path.join(home, "plugins", "cache", "kollate", "kollate")
     versions = [d for d in glob.glob(os.path.join(cache, "*"))
                 if os.path.isdir(d) and os.path.basename(d).replace(".", "").isdigit()]
     versions.sort(key=lambda d: [int(x) for x in os.path.basename(d).split(".")])
     for stale in versions[:-1]:
         _shutil.rmtree(stale, ignore_errors=True)
-        pruned += 1
-    repointed = 0
-    for root, _dirs, files in os.walk(home):
-        if os.path.basename(root) != ".codex-plugin" or "plugin.json" not in files:
-            continue
-        manifest = os.path.join(root, "plugin.json")
-        try:
-            with open(manifest, encoding="utf-8") as handle:
-                spec = json.load(handle)
-        except (OSError, ValueError):
-            continue
-        if spec.get("name") != "kollate" or spec.get("hooks") == wanted:
-            continue
-        spec["hooks"] = wanted
-        with open(manifest, "w", encoding="utf-8") as handle:
-            json.dump(spec, handle, indent=2)   # no BOM: plain utf-8, not Set-Content
-        repointed += 1
-    return repointed, pruned
+    return len(versions) - 1
 
 
 def cmd_status() -> int:
@@ -1612,7 +1556,7 @@ def main() -> int:
                 print(json.dumps({"systemMessage":
                     f"{RED}\u2715{RST} {DIM}Kollate is not recording - this machine is not "
                     f"connected. {RST}{RED}{command('connect')}{RST}{DIM} sets it up.{RST}"
-                    + hook_pair_note(),
+                    ,
                     "suppressOutput": True}))
             if creds["capture_token"] and creds["endpoint"]:
                 cwd = event.get("cwd") or ""
@@ -1648,7 +1592,7 @@ def main() -> int:
                 else:
                     text = (f"{MARK} {DIM}Recorded to Kollate ({CYA}{creds['endpoint']}/app/conversations{RST}{DIM}) "
                             f"· opt out: {command('pause')}{RST}")
-                print(json.dumps({"systemMessage": text + update_nudge() + hook_pair_note(),
+                print(json.dumps({"systemMessage": text + update_nudge() ,
                                   "suppressOutput": True}))
         detach(lambda: reconcile(live), "reconcile-worker", event)
         return 0

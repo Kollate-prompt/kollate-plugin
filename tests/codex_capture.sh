@@ -100,90 +100,54 @@ print("the hook command strings are frozen")
 # at all, and capture stops with it (measured 2026-09-07, re-confirmed 2026-09-11). If this
 # test fails, the change is not a refactor, it is a release note and a re-approval for every
 # user, done with /hooks.
-S = "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py"
-
-# The shipped file has to serve a plugin-screen install on BOTH systems, and Codex offers no
-# per-OS field: a `command_windows` key and a per-OS object in the manifest were both tested on
-# Windows 11 and silently ignored (2026-09-11). So it carries both interpreters as two entries.
-# Codex runs each one; the interpreter that exists completes and the other is reported Failed.
-# That visible failure is what buys a working UI route on Windows, where the POSIX `A || B || C`
-# probe is never executed at all because Codex runs hook commands through a shell on macOS and
-# Linux but not on Windows.
+#
+# One command per event, the same bytes on every operating system. Codex has no per-OS field
+# (command_windows and a per-OS manifest object were both ignored, 2026-09-11), runs hooks
+# through a shell on POSIX and not on Windows, and re-syncs the marketplace from git whenever
+# it changes - so a per-OS file chosen by an installer was reverted by the next push (13.09).
+# The command names kollate-hook.cmd: a batch file to Windows, a shell script to the rest.
+H = '"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd"'
 CROSS = {
     "Stop": "capture", "SessionEnd": "capture", "SessionStart": "reconcile",
 }
 manifest = json.load(open("plugins/kollate/hooks/hooks-codex.json"))["hooks"]
+check("the manifest names exactly these events", sorted(manifest), sorted(CROSS))
 for event, verb in CROSS.items():
     got = [h["command"] for h in manifest[event][0]["hooks"]]
-    check(f"{event} offers both interpreters", got,
-          [f'python3 -S -E "{S}" {verb}', f'py -3 -S -E "{S}" {verb}'])
-check("neither entry needs a shell",
+    check(f"{event} runs the one file", got, [f"{H} {verb}"])
+check("no entry needs a shell",
       [c for e in manifest.values() for g in e for h in g["hooks"] for c in [h["command"]]
        if any(op in c for op in ("||", "&&", "|", ";", ">", "<", "&"))], [])
 check("SessionStart only fires for a real session start",
       manifest["SessionStart"][0].get("matcher"), "startup|resume|clear")
 check("every hook declares the timeout Codex would clamp it to anyway",
       sorted({h["timeout"] for e in manifest.values() for g in e for h in g["hooks"]}), [3])
+check("the per-OS files are gone, so nothing can point at them",
+      [n for n in os.listdir("plugins/kollate/hooks") if n.startswith("hooks-codex-")], [])
 
-print("each installer points at the single-command file for its own system")
-# Nobody who ran an installer should see a hook fail, so each one repoints the installed copy
-# at a file holding one invocation. `marketplace upgrade` undoes that, which is why rerunning
-# the install command is the documented repair.
-SINGLE = {
-    "hooks-codex-windows.json": ('py -3 -S -E "%s" %s', "install.ps1", "install.sh"),
-    "hooks-codex-posix.json": ('python3 -S -E "%s" %s || python -S -E "%s" %s',
-                               "install.sh", "install.ps1"),
-}
-for name, (shape, mine, theirs) in SINGLE.items():
-    one = json.load(open("plugins/kollate/hooks/" + name))["hooks"]
-    check(f"{name} covers the same events", sorted(one), sorted(manifest))
-    for event, verb in CROSS.items():
-        entries = one[event][0]["hooks"]
-        check(f"{name} {event} runs one command", len(entries), 1)
-        want = shape % ((S, verb) if shape.count("%s") == 2 else (S, verb, S, verb))
-        check(f"{name} {event} is that command", entries[0]["command"], want)
-    check(f"{name} still only fires SessionStart for a real session start",
-          one["SessionStart"][0].get("matcher"), "startup|resume|clear")
-    check(f"{name} is pointed at by {mine} and only there",
-          name in open(mine).read() and name not in open(theirs).read(), True)
-check("the Windows file asks for nothing a shell would have to do",
-      [c for e in json.load(open("plugins/kollate/hooks/hooks-codex-windows.json"))["hooks"].values()
-       for g in e for h in g["hooks"] for c in [h["command"]]
-       if any(op in c for op in ("||", "&&", "|", ";", ">", "<", "&"))], [])
-
-print("the Failed hook explains itself, once")
-# The two-interpreter file means Codex reports one hook Failed every session. Unexplained, that
-# reads as a broken install; explained every session, it is noise. Once per machine, and only
-# when the manifest still names the file that causes it.
-import tempfile
-HOME_NOTE = tempfile.mkdtemp()
-NOTE_CODE = """
-import json, os, sys
-sys.argv = ["kollate.py", "status"]
-sys.path.insert(0, %r)
-import importlib.util
-spec = importlib.util.spec_from_file_location("k", %r)
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-root = os.environ["CLAUDE_PLUGIN_ROOT"]
-os.makedirs(os.path.join(root, ".codex-plugin"), exist_ok=True)
-with open(os.path.join(root, ".codex-plugin", "plugin.json"), "w") as h:
-    json.dump({"hooks": os.environ["WANT_HOOKS"]}, h)
-print(json.dumps([bool(k.hook_pair_note()), bool(k.hook_pair_note())]))
-""" % ("plugins/kollate/hooks", os.path.abspath("plugins/kollate/hooks/kollate.py"))
-
-def note_says(hooks_value):
-    root = tempfile.mkdtemp()
-    env = dict(os.environ, HOME=tempfile.mkdtemp(), CLAUDE_PLUGIN_ROOT=root,
-               WANT_HOOKS=hooks_value)
-    env.pop("CLAUDE_PLUGIN_DATA", None)
-    out = subprocess.run([sys.executable, "-c", NOTE_CODE], env=env,
-                         capture_output=True, text=True).stdout
-    return json.loads(out or "[null, null]")
-
-check("it speaks the first time the two-interpreter file is in use",
-      note_says("./hooks/hooks-codex.json"), [True, False])
-check("and never when an installer has repointed the manifest",
-      note_says("./hooks/hooks-codex-windows.json"), [False, False])
+print("kollate-hook.cmd is one file for both systems")
+# sh: line 1 is the shebang, line 2 starts with ':' (a no-op) and execs Python, so line 3 is
+# never reached. cmd: line 1 fails harmlessly ('#!' is not a command), line 2 is a label
+# (leading ':'), line 3 runs. Verified by Codex itself on the Windows bench, 13.09.
+_cmd = "plugins/kollate/hooks/kollate-hook.cmd"
+_lines = open(_cmd, newline="").read().split("\n")
+check("executable bit, kept by git and by Codex's copies", os.access(_cmd, os.X_OK), True)
+check("shebang first", _lines[0], "#!/bin/sh")
+check("the shell line is a cmd label", _lines[1].startswith(": ;"), True)
+check("the shell line hands over to Python and never returns", "exec python" in _lines[1], True)
+check("the cmd line is silent and finds the script beside itself",
+      _lines[2].startswith("@py -3") and "%~dp0kollate.py" in _lines[2] and "%*" in _lines[2], True)
+check("LF endings only - CRLF would put a \\r in the sh line", any("\r" in l for l in _lines), False)
+if os.name != "nt":
+    with tempfile.TemporaryDirectory() as _d:
+        _p = os.path.join(_d, "hooks"); os.makedirs(_p)
+        import shutil as _sh
+        _sh.copy(_cmd, _p); _sh.copymode(_cmd, os.path.join(_p, "kollate-hook.cmd"))
+        open(os.path.join(_p, "kollate.py"), "w").write("import sys; print('ARGS', sys.argv[1:])")
+        _r = subprocess.run([os.path.join(_p, "kollate-hook.cmd"), "capture"],
+                            capture_output=True, text=True, input="{}")
+        check("run directly, no shell in front, it reaches Python with the verb",
+              (_r.returncode, _r.stdout.strip()), (0, "ARGS ['capture']"))
 
 print("status tells the truth about hooks and about versions")
 # Both from Eyal's 12.09 session: status told him to approve hooks he had already approved,
@@ -233,29 +197,6 @@ for _installer in ("install.sh", "install.ps1"):
     check(f"{_installer} prunes stale plugin caches",
           "cache" in open(_installer).read() and "kollate" in open(_installer).read(), True)
 
-print("install.sh repoints the copy Codex actually loads - the one under a hidden .tmp dir")
-# The first version used glob("**"), which skips dotted directories, so only the cache copy
-# was repointed and Gal's Mac kept the two-interpreter file. This runs the real block.
-import re, subprocess, tempfile
-_sh = open("install.sh").read()
-_block = re.search(r"<<'KOLLATE_POSIX_HOOKS'[^\n]*\n(.*?)\nKOLLATE_POSIX_HOOKS", _sh, re.S).group(1)
-with tempfile.TemporaryDirectory(prefix="kollate-") as _home:
-    _paths = [os.path.join(_home, "plugins", "cache", "kollate", "kollate", "0.0.1", ".codex-plugin"),
-              os.path.join(_home, ".tmp", "marketplaces", "kollate", "plugins", "kollate", ".codex-plugin")]
-    for _d in _paths:
-        os.makedirs(_d)
-        json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_d, "plugin.json"), "w"))
-    _other = os.path.join(_home, "plugins", "cache", "openai", "templates", "0.1.0", ".codex-plugin")
-    os.makedirs(_other)
-    json.dump({"name": "templates"}, open(os.path.join(_other, "plugin.json"), "w"))
-    subprocess.run([sys.executable, "-c", _block], env={**os.environ, "CODEX_HOME": _home}, check=True,
-                   capture_output=True)
-    for _d in _paths:
-        check(f"repointed {_d.split(_home)[1]}",
-              json.load(open(os.path.join(_d, "plugin.json")))["hooks"], "./hooks/hooks-codex-posix.json")
-    check("and leaves other plugins alone even when the home path says kollate",
-          json.load(open(os.path.join(_other, "plugin.json"))), {"name": "templates"})
-
 print("Codex skills do not lean on a variable Codex never sets")
 # 13.09: every skill ran py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" - Codex leaves that
 # empty, so the command was "/hooks/kollate.py" and the model went hunting for the file.
@@ -265,27 +206,18 @@ for _f in sorted(glob.glob("plugins/kollate/codex-skills/*/SKILL.md")):
           'py -3 "${CLAUDE_PLUGIN_ROOT}' in _t or 'python3 "${CLAUDE_PLUGIN_ROOT}' in _t, False)
     check(f"{_f.split('/')[-2]}: says where the script really is", "two folders up" in _t, True)
 
-print("update on Codex tidies the install the way the installers do")
+print("update on Codex prunes the way the installers do")
 with tempfile.TemporaryDirectory(prefix="kollate-") as _home:
     _cache = os.path.join(_home, "plugins", "cache", "kollate", "kollate")
     for _ver in ("0.4.9", "0.4.10"):
-        _d = os.path.join(_cache, _ver, ".codex-plugin"); os.makedirs(_d)
-        json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_d, "plugin.json"), "w"))
-    _m = os.path.join(_home, ".tmp", "marketplaces", "kollate", "plugins", "kollate", ".codex-plugin"); os.makedirs(_m)
-    json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_m, "plugin.json"), "w"))
-    _o = os.path.join(_home, "plugins", "cache", "openai", "x", "1.0", ".codex-plugin"); os.makedirs(_o)
-    json.dump({"name": "x"}, open(os.path.join(_o, "plugin.json"), "w"))
+        os.makedirs(os.path.join(_cache, _ver, ".codex-plugin"))
     os.environ["CODEX_HOME"] = _home
     try:
-        _rep, _pru = kollate.tidy_codex_install()
+        _pruned = kollate.tidy_codex_install()
     finally:
         del os.environ["CODEX_HOME"]
-    _want = "./hooks/hooks-codex-windows.json" if os.name == "nt" else "./hooks/hooks-codex-posix.json"
-    check("repoints the newest cache copy and the hidden marketplace copy", _rep, 2)
-    check("to this operating system's hook file",
-          json.load(open(os.path.join(_m, "plugin.json")))["hooks"], _want)
     check("removes the older version (numeric sort, 0.4.10 > 0.4.9)", sorted(os.listdir(_cache)), ["0.4.10"])
-    check("and leaves other plugins alone", json.load(open(os.path.join(_o, "plugin.json"))), {"name": "x"})
+    check("and says how many", _pruned, 1)
 
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))

@@ -5,12 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd\" capture",
             "timeout": 3
           }
         ]
@@ -21,12 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" capture",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd\" capture",
             "timeout": 3
           }
         ]
@@ -34,19 +24,14 @@
     ],
     "SessionStart": [
       {
+        "matcher": "startup|resume|clear",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "py -3 -S -E \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py\" reconcile",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd\" reconcile",
             "timeout": 3
           }
-        ],
-        "matcher": "startup|resume|clear"
+        ]
       }
     ]
   }
