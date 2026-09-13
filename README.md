@@ -114,7 +114,7 @@ thing anybody runs to check a change quickly. Run it separately when the server 
 ## Codex
 
 Codex will not run a hook until somebody approves it, and says nothing when it skips one. After
-installing, start Codex, run `/hooks`, and trust Kollate's. `kollate:status` says whether the hooks
+installing, start Codex, run `/hooks`, and trust Kollate's. `$kollate:status` says whether the hooks
 have ever actually run.
 
 **The hook command strings must never change casually.** Codex pins hook trust to a hash of each
@@ -149,7 +149,7 @@ matter: Codex's default mode ("Auto") lets a command write only inside the proje
 it no network, and everything Kollate changes lives in `~/.kollate`. The installer therefore
 adds that one directory to `sandbox_workspace_write.writable_roots` in `~/.codex/config.toml`
 (merging into whatever is already there, keeping a `.kollate-backup` beside it), which is what
-makes `kollate:pause`, `resume`, `stop` and `record` work from inside a session. `connect`,
+makes `$kollate:pause`, `resume`, `stop` and `record` work from inside a session. `connect`,
 `update` and `backfill` need the network as well, so under Codex they say so and print the
 command to run in a terminal instead. Nothing here ever reports success for a change that did
 not reach disk.

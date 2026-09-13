@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 exec python3 - <<'PY'
-import json, os, subprocess, sys, tempfile, threading, time
+import glob, json, os, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, "plugins/kollate/hooks")
@@ -255,6 +255,37 @@ with tempfile.TemporaryDirectory(prefix="kollate-") as _home:
               json.load(open(os.path.join(_d, "plugin.json")))["hooks"], "./hooks/hooks-codex-posix.json")
     check("and leaves other plugins alone even when the home path says kollate",
           json.load(open(os.path.join(_other, "plugin.json"))), {"name": "templates"})
+
+print("Codex skills do not lean on a variable Codex never sets")
+# 13.09: every skill ran py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" - Codex leaves that
+# empty, so the command was "/hooks/kollate.py" and the model went hunting for the file.
+for _f in sorted(glob.glob("plugins/kollate/codex-skills/*/SKILL.md")):
+    _t = open(_f).read()
+    check(f"{_f.split('/')[-2]}: no ${{CLAUDE_PLUGIN_ROOT}} command",
+          'py -3 "${CLAUDE_PLUGIN_ROOT}' in _t or 'python3 "${CLAUDE_PLUGIN_ROOT}' in _t, False)
+    check(f"{_f.split('/')[-2]}: says where the script really is", "two folders up" in _t, True)
+
+print("update on Codex tidies the install the way the installers do")
+with tempfile.TemporaryDirectory(prefix="kollate-") as _home:
+    _cache = os.path.join(_home, "plugins", "cache", "kollate", "kollate")
+    for _ver in ("0.4.9", "0.4.10"):
+        _d = os.path.join(_cache, _ver, ".codex-plugin"); os.makedirs(_d)
+        json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_d, "plugin.json"), "w"))
+    _m = os.path.join(_home, ".tmp", "marketplaces", "kollate", "plugins", "kollate", ".codex-plugin"); os.makedirs(_m)
+    json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_m, "plugin.json"), "w"))
+    _o = os.path.join(_home, "plugins", "cache", "openai", "x", "1.0", ".codex-plugin"); os.makedirs(_o)
+    json.dump({"name": "x"}, open(os.path.join(_o, "plugin.json"), "w"))
+    os.environ["CODEX_HOME"] = _home
+    try:
+        _rep, _pru = kollate.tidy_codex_install()
+    finally:
+        del os.environ["CODEX_HOME"]
+    _want = "./hooks/hooks-codex-windows.json" if os.name == "nt" else "./hooks/hooks-codex-posix.json"
+    check("repoints the newest cache copy and the hidden marketplace copy", _rep, 2)
+    check("to this operating system's hook file",
+          json.load(open(os.path.join(_m, "plugin.json")))["hooks"], _want)
+    check("removes the older version (numeric sort, 0.4.10 > 0.4.9)", sorted(os.listdir(_cache)), ["0.4.10"])
+    check("and leaves other plugins alone", json.load(open(os.path.join(_o, "plugin.json"))), {"name": "x"})
 
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))

@@ -312,8 +312,8 @@ def command(verb: str) -> str:
     to a command that does not exist, which reads as "the plugin is broken".
     """
     # Codex namespaces a plugin's skills with the plugin name, so both tools land on the same
-    # words: /kollate:status there, kollate:status here.
-    return f"kollate:{verb}" if host() == "codex" else f"/kollate:{verb}"
+    # words: /kollate:status there, $kollate:status here (Codex inserts the $ itself from its picker).
+    return f"$kollate:{verb}" if host() == "codex" else f"/kollate:{verb}"
 
 
 def hook_seen_path() -> str:
@@ -645,6 +645,8 @@ def cmd_update() -> int:
     # ordinary, so the version pair is stated plainly and the restart is a step, not a caveat.
     print(f"{KMARK}Kollate update")
     print(f"Installed: {mine or 'unknown'} -> newest released: {latest or 'could not check'}")
+    if host() == "codex":
+        return codex_update()
     claude_cli = shutil.which("claude")
     if not claude_cli:
         # The desktop app's process often carries a bare PATH, so which() misses a CLI that
@@ -714,6 +716,67 @@ def cmd_update() -> int:
           "your platform, paste it into PowerShell (Windows) or Terminal (Mac), press "
           f"enter. Then restart Claude and run {command('status')}.")
     return 1
+
+
+def codex_update() -> int:
+    """Update through Codex's own plugin commands, then leave the plugin the way the installer
+    would: one hook file per operating system, and only the newest version on disk.
+
+    `codex plugin add` writes the manifest fresh (two-interpreter hooks file, so one Failed
+    line per session) and leaves the previous version directory behind (its skills stay
+    indexed, so a person sees two of each). The installers fix both; so must this.
+    """
+    codex_cli = shutil.which("codex") or shutil.which("codex.cmd")
+    if not codex_cli:
+        print("The codex command is not reachable from here. Update by re-running the install "
+              "command from the Connect page - it keeps your connection.")
+        return 1
+    for args in (["plugin", "marketplace", "upgrade", "kollate"],
+                 ["plugin", "add", "kollate@kollate"]):
+        result = subprocess.run([codex_cli] + args, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            print("codex " + " ".join(args) + " failed: "
+                  + (result.stderr or result.stdout).strip()[:300])
+            print("Update by re-running the install command from the Connect page instead.")
+            return 1
+    repointed, pruned = tidy_codex_install()
+    print(f"Updated. Hook file set for this operating system on {repointed} manifest(s); "
+          f"{pruned} old version folder(s) removed.")
+    print("Start a new Codex session to finish - a running one keeps the code it loaded.")
+    return 0
+
+
+def tidy_codex_install() -> tuple:
+    """What install.sh / install.ps1 do after `codex plugin add`, from Python, for both OSes."""
+    import glob, shutil as _shutil
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    wanted = ("./hooks/hooks-codex-windows.json" if os.name == "nt"
+              else "./hooks/hooks-codex-posix.json")
+    pruned = 0
+    cache = os.path.join(home, "plugins", "cache", "kollate", "kollate")
+    versions = [d for d in glob.glob(os.path.join(cache, "*"))
+                if os.path.isdir(d) and os.path.basename(d).replace(".", "").isdigit()]
+    versions.sort(key=lambda d: [int(x) for x in os.path.basename(d).split(".")])
+    for stale in versions[:-1]:
+        _shutil.rmtree(stale, ignore_errors=True)
+        pruned += 1
+    repointed = 0
+    for root, _dirs, files in os.walk(home):
+        if os.path.basename(root) != ".codex-plugin" or "plugin.json" not in files:
+            continue
+        manifest = os.path.join(root, "plugin.json")
+        try:
+            with open(manifest, encoding="utf-8") as handle:
+                spec = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if spec.get("name") != "kollate" or spec.get("hooks") == wanted:
+            continue
+        spec["hooks"] = wanted
+        with open(manifest, "w", encoding="utf-8") as handle:
+            json.dump(spec, handle, indent=2)   # no BOM: plain utf-8, not Set-Content
+        repointed += 1
+    return repointed, pruned
 
 
 def cmd_status() -> int:

@@ -2,15 +2,12 @@
 name: update
 description: Update the Kollate plugin to the newest version
 ---
-On Codex the plugin updates from the marketplace it was installed from:
-run `codex plugin marketplace upgrade kollate && codex plugin add kollate@kollate`,
-then tell the person to start a new session - a running one keeps the code it loaded.
-If that fails, fall back to the plugin's own report: `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" update || python3 "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" update || python "${CLAUDE_PLUGIN_ROOT}/hooks/kollate.py" update` and report its output to the user.
-Report it in one calm line, the way you would report any finished step: which version it moved
-to, and that Claude needs a restart to finish. Restarting after an update is ordinary - do not
-present it as a warning, a caveat, or a surprise, and do not contrast the version this chat is
-running with the new one as though something were wrong.
+Run `the script` with `update` and report its output in one calm line: which version it moved to, and that a new Codex session is needed to finish. Restarting after an update is ordinary - not a warning, not a surprise.
 
-If every interpreter in that line fails (the output is just "Python", empty, or the Microsoft Store opens), do NOT conclude that Python is missing. On Windows a real Python is very often installed somewhere PATH does not reach, and telling the person to install what they already have is the single worst answer you can give here. Look for it first, quietly: `where.exe python`, then `%LOCALAPPDATA%\Programs\Python\Python3*\python.exe`, `%LOCALAPPDATA%\Python\bin\python.exe`, `%PROGRAMFILES%\Python3*\python.exe`, `C:\Python3*\python.exe`. If any of those exists, re-run the command with that full path in quotes and carry on as though nothing happened. Only when that search comes up empty is Python genuinely absent: install it yourself with `winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements` and retry. Never tell the user Python is not installed before the search has come up empty, never send them away to install it, and do not mention interpreters at all when the command simply works.
+Inside a Codex session the script has no network and will answer with the exact terminal line to run instead; show that line as the answer. Do not run `codex plugin` commands yourself.
 
-The command tries three interpreter names in turn, so on any given machine the first one or two print `command not found`. That is the probe working, not a failure: report only what the plugin itself printed, and never mention the interpreter.
+**Where the script is.** This file is `<plugin>/codex-skills/update/SKILL.md`; the script is `<plugin>/hooks/kollate.py`, two folders up. Take the absolute path you loaded this file from and build the script path from it. Do not use `${CLAUDE_PLUGIN_ROOT}` - Codex does not set it, and a command with it in fails with "can't open file '/hooks/kollate.py'". If you do not know where this file came from, the plugin is the newest folder under `~/.codex/plugins/cache/kollate/kollate/` (`%USERPROFILE%\.codex\plugins\cache\kollate\kollate\` on Windows).
+
+**Run it.** macOS/Linux: `python3 "<plugin>/hooks/kollate.py" update`. Windows: `py -3 "<plugin>\hooks\kollate.py" update`; if `py` is missing try `python`. On Windows a real Python is often installed where PATH does not reach - look in `%LOCALAPPDATA%\Programs\Python\Python3*\python.exe` before concluding it is absent, and only then install it with `winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements`.
+
+Report only what the script printed. Never mention interpreters, paths or the lookup when the command simply works. If the output says the command needs the network and gives a terminal line, show that line exactly - it is the answer, not a failure.
