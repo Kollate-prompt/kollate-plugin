@@ -416,10 +416,27 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
   Write-Host ""
 }
 if ($codexInstalled) {
-  Write-Host "  In Codex, three things:"
-  Write-Host "    1. Quit Codex completely and open it again."
-  Write-Host "    2. Run /hooks and press t to trust Kollate's - Codex runs no hook you"
-  Write-Host "       have not approved, and says nothing when it skips one."
-  Write-Host "    3. Run:  kollate:connect"
+  $codexHomeOut = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }
+  $kollatePy = Get-ChildItem "$codexHomeOut\plugins\cache\kollate\kollate" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d+(\.\d+)*$' } | Sort-Object { [version]$_.Name } | Select-Object -Last 1 |
+    ForEach-Object { Join-Path $_.FullName 'hooks\kollate.py' }
+  if (-not $kollatePy) { $kollatePy = "$codexHomeOut\plugins\cache\kollate\kollate\<version>\hooks\kollate.py" }
+  Write-Host "  In Codex, two things, and nothing is captured until both are done:"
+  Write-Host ""
+  Write-Host "    1. Quit Codex completely and open it again. It will say 'Hooks need review' -"
+  Write-Host "       choose 'Trust all and continue'. (Missed it? Type /hooks and trust Kollate's,"
+  Write-Host "       then quit and open Codex once more.)"
+  Write-Host ""
+  Write-Host "    2. Connect from THIS window - Codex has no network inside a session, so this"
+  Write-Host "       one command cannot run in there:"
+  Write-Host ""
+  Write-Host "         py -3 `"$kollatePy`" connect"
+  Write-Host ""
+  Write-Host "       One connection serves Claude Code and Codex alike; if you already connected,"
+  Write-Host "       skip this."
+  Write-Host ""
+  Write-Host "  Inside Codex the commands start with a dollar sign: type `$koll and pick from the list -"
+  Write-Host "  `$kollate:status shows whether the hooks have ever actually run, `$kollate:pause stops"
+  Write-Host "  capture. Codex runs no hook you have not approved, and says nothing when it skips one."
   Write-Host ""
 }

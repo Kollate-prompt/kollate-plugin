@@ -371,16 +371,25 @@ DONE
 fi
 
 if [ -n "$CODEX_INSTALLED" ]; then
+KOLLATE_CODEX_PY=$(ls -d "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/kollate/kollate/*/hooks/kollate.py 2>/dev/null | sort -V | tail -1)
 cat <<CODEX_DONE
-  In Codex there is one extra step, and nothing is captured until you do it:
+  In Codex, two things, and nothing is captured until both are done:
 
-    1. Start Codex. It will say some hooks need review.
-    2. Trust Kollate's. (Or run /hooks at any time and trust them there.)
-    3. Then:  kollate:connect
+    1. Quit Codex completely and open it again. It will say "Hooks need review" -
+       choose "Trust all and continue". (Missed it? Type /hooks and trust Kollate's,
+       then quit and open Codex once more.)
 
-  Codex will not run a hook it has not been shown, and it says nothing when it skips one -
-  so an unapproved install looks exactly like a working one. kollate:status will tell you
-  whether the hooks have ever actually run.
+    2. Connect from THIS terminal - Codex has no network inside a session, so this
+       one command cannot run in there:
+
+         python3 "${KOLLATE_CODEX_PY:-$HOME/.codex/plugins/cache/kollate/kollate/<version>/hooks/kollate.py}" connect
+
+       One connection serves Claude Code and Codex alike; if you already connected,
+       skip this.
+
+  Inside Codex the commands start with a dollar sign: type \$koll and pick from the list -
+  \$kollate:status shows whether the hooks have ever actually run, \$kollate:pause stops
+  capture. Codex runs no hook you have not approved, and says nothing when it skips one.
 
 CODEX_DONE
 fi
