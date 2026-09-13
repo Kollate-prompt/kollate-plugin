@@ -159,6 +159,28 @@ if os.name != "nt":
         check("through a shell it reaches Python with the verb",
               (_r.returncode, _r.stdout.strip()), (0, "ARGS ['capture']"))
 
+print("the SessionStart hook nudges to update, with the right instructions for the tool")
+# Hooks run with network (unlike the sandboxed skill commands), so the update check lives here.
+# On Codex the nudge must name the terminal commands - $kollate:update in a session cannot
+# reach the network to update, so pointing at it would be a pointer to another pointer.
+with tempfile.TemporaryDirectory() as _d:
+    os.environ["CLAUDE_PLUGIN_DATA"] = _d
+    os.environ["CLAUDE_PLUGIN_ROOT"] = os.path.expanduser("~/.codex/plugins/cache/kollate/kollate/9.9.9/hooks")  # host() -> codex
+    try:
+        import importlib; importlib.reload(kollate)
+        json.dump({"latest": "9.9.9", "checked_at": time.time()},
+                  open(os.path.join(_d, "update-check.json"), "w"))
+        _n = kollate.update_nudge()
+        check("a newer version produces a nudge", bool(_n), True)
+        check("naming codex's own update commands, not $kollate:update",
+              "codex plugin marketplace upgrade kollate" in _n and "codex plugin add kollate@kollate" in _n, True)
+        json.dump({"latest": "0.0.1", "checked_at": time.time()},
+                  open(os.path.join(_d, "update-check.json"), "w"))
+        check("and stays silent when already current", kollate.update_nudge(), "")
+    finally:
+        del os.environ["CLAUDE_PLUGIN_DATA"]; del os.environ["CLAUDE_PLUGIN_ROOT"]
+        importlib.reload(kollate)
+
 print("status tells the truth about hooks and about versions")
 # Both from Eyal's 12.09 session: status told him to approve hooks he had already approved,
 # and reported "Newest version released: 0.4.27" while he was running 0.4.48.
