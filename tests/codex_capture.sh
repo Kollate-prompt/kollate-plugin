@@ -106,7 +106,9 @@ print("the hook command strings are frozen")
 # through a shell on POSIX and not on Windows, and re-syncs the marketplace from git whenever
 # it changes - so a per-OS file chosen by an installer was reverted by the next push (13.09).
 # The command names kollate-hook.cmd: a batch file to Windows, a shell script to the rest.
-H = '"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd"'
+# Unquoted on purpose: Codex runs the hook without a shell on Windows, and a quoted .cmd path
+# is exec'd as a program literally named with the quotes and reported Failed (bench, 13.09).
+H = '${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd'
 CROSS = {
     "Stop": "capture", "SessionEnd": "capture", "SessionStart": "reconcile",
 }
