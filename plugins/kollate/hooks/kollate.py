@@ -44,6 +44,13 @@ BACKFILL_MAX_LIMIT = 200
 # How long the detached worker waits for the finished turn to be flushed to the transcript.
 SETTLE_SECONDS = 0.75
 
+# On Windows the detached delivery worker has no console of its own (DETACHED_PROCESS), so every
+# console app it launches - curl, above all, on every single turn - gets a fresh VISIBLE console
+# window that flashes up and vanishes. To a person mid-conversation that is a window "opening and
+# closing like crazy" (13.09). CREATE_NO_WINDOW gives those children no window at all. No-op off
+# Windows.
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}
+
 
 # --------------------------------------------------------------------------- paths / state
 
@@ -349,7 +356,7 @@ def fetch_latest_version(timeout: float) -> str:
     """
     try:
         done = subprocess.run(["curl", "-fsSL", "--max-time", str(int(timeout)), LATEST_VERSION_URL],
-                              capture_output=True, text=True, timeout=timeout + 2)
+                              capture_output=True, text=True, timeout=timeout + 2, **NO_WINDOW)
         if done.returncode != 0:
             return ""
         return str(json.loads(done.stdout or "{}").get("version") or "")
@@ -667,7 +674,7 @@ def cmd_update() -> int:
             claude_cli = sorted(found)[-1]
     if claude_cli:
         result = subprocess.run([claude_cli, "plugin", "update", "kollate@kollate"],
-                                capture_output=True, text=True, timeout=120)
+                                capture_output=True, text=True, timeout=120, **NO_WINDOW)
         detail = next((line.strip() for line in (result.stdout + result.stderr).splitlines()
                        if "updated" in line.lower() or "latest" in line.lower()), "").lstrip("\u2714 ").strip()
         if result.returncode == 0:
@@ -711,7 +718,7 @@ def codex_update() -> int:
         return 1
     for args in (["plugin", "marketplace", "upgrade", "kollate"],
                  ["plugin", "add", "kollate@kollate"]):
-        result = subprocess.run([codex_cli] + args, capture_output=True, text=True, timeout=180)
+        result = subprocess.run([codex_cli] + args, capture_output=True, text=True, timeout=180, **NO_WINDOW)
         if result.returncode != 0:
             print("codex " + " ".join(args) + " failed: "
                   + (result.stderr or result.stdout).strip()[:300])
@@ -1084,6 +1091,7 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
             capture_output=True,
             text=True,
             timeout=CONNECT_TIMEOUT_SECONDS + 5,
+            **NO_WINDOW,
         )
         status = (result.stdout or "").strip()
         return status.startswith("2")
@@ -1781,7 +1789,7 @@ def connect() -> int:
     try:
         probe = subprocess.run(
             ["curl", "-s", "-o", os.devnull, "-w", "%{http_code}", "--max-time", "10", endpoint],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=20, **NO_WINDOW,
         )
         if not (probe.stdout or "").strip().startswith(("2", "3", "4")):
             # Under Codex this is almost never the address: its default mode runs a skill's
@@ -1846,6 +1854,7 @@ def connect() -> int:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                **NO_WINDOW,
             )
             issued = json.loads(result.stdout or "{}")
         except Exception:
