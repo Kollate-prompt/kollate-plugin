@@ -233,6 +233,24 @@ for _installer in ("install.sh", "install.ps1"):
     check(f"{_installer} prunes stale plugin caches",
           "cache" in open(_installer).read() and "kollate" in open(_installer).read(), True)
 
+print("install.sh repoints the copy Codex actually loads - the one under a hidden .tmp dir")
+# The first version used glob("**"), which skips dotted directories, so only the cache copy
+# was repointed and Gal's Mac kept the two-interpreter file. This runs the real block.
+import re, subprocess, tempfile
+_sh = open("install.sh").read()
+_block = re.search(r"<<'KOLLATE_POSIX_HOOKS'[^\n]*\n(.*?)\nKOLLATE_POSIX_HOOKS", _sh, re.S).group(1)
+with tempfile.TemporaryDirectory() as _home:
+    _paths = [os.path.join(_home, "plugins", "cache", "kollate", "kollate", "0.0.1", ".codex-plugin"),
+              os.path.join(_home, ".tmp", "marketplaces", "kollate", "plugins", "kollate", ".codex-plugin")]
+    for _d in _paths:
+        os.makedirs(_d)
+        json.dump({"name": "kollate", "hooks": "./hooks/hooks-codex.json"}, open(os.path.join(_d, "plugin.json"), "w"))
+    subprocess.run([sys.executable, "-c", _block], env={**os.environ, "CODEX_HOME": _home}, check=True,
+                   capture_output=True)
+    for _d in _paths:
+        check(f"repointed {_d.split(_home)[1]}",
+              json.load(open(os.path.join(_d, "plugin.json")))["hooks"], "./hooks/hooks-codex-posix.json")
+
 print("the two manifests agree")
 codex = json.load(open("plugins/kollate/.codex-plugin/plugin.json"))
 claude = json.load(open("plugins/kollate/.claude-plugin/plugin.json"))
