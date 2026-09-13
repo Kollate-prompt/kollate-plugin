@@ -324,6 +324,18 @@ server.shutdown()
 check("the hook delivered", bool(received), True)
 check("and left a heartbeat, so a silent hook is visible",
       os.path.exists(os.path.join(data, "hook-seen")), True)
+# The hook wrote that heartbeat where CLAUDE_PLUGIN_DATA pointed. The person running status
+# from a plain shell has no such variable - status has to go and find it, like the watermarks.
+_status_env = dict(os.environ, HOME=home, CLAUDE_CONFIG_DIR=os.path.join(home, ".claude"))
+_status_env.pop("CLAUDE_PLUGIN_DATA", None)
+_seen_dir = os.path.join(home, ".claude", "plugins", "data", "kollate-kollate")
+os.makedirs(_seen_dir)
+os.rename(os.path.join(data, "hook-seen"), os.path.join(_seen_dir, "hook-seen"))
+_status = subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "status"],
+                         env=_status_env, capture_output=True, text=True, timeout=30).stdout
+check("and status finds it even from a shell without CLAUDE_PLUGIN_DATA",
+      "Hooks last ran: " in _status, True)
+check("rather than claiming the hooks never ran", "NEVER RUN" in _status, False)
 if received:
     path, headers, body = received[0]
     check("to the capture function", path, "/functions/v1/capture")

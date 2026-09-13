@@ -134,12 +134,16 @@ def watermark_locations() -> list:
     watermarks, while /kollate:status fell back to ~/.kollate and reported "never delivered" on
     a desktop that was delivering. Guessing one path is what caused that, so enumerate.
     """
+    return [os.path.join(d, "delivered.json") for d in data_dirs()]
+
+
+def data_dirs() -> list:
+    """Every directory a hook may have written state into, on this machine."""
     import glob
-    paths = [os.path.join(plugin_dir(), "delivered.json"),
-             os.path.join(shared_dir(), "delivered.json")]
+    dirs = [plugin_dir(), shared_dir()]
     config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    paths += glob.glob(os.path.join(config, "plugins", "data", "*kollate*", "delivered.json"))
-    return list(dict.fromkeys(paths))
+    dirs += glob.glob(os.path.join(config, "plugins", "data", "*kollate*"))
+    return list(dict.fromkeys(dirs))
 
 
 def credentials_path() -> str:
@@ -742,7 +746,10 @@ def cmd_status() -> int:
             pass
     lines.append(f"Sessions tracked on this desktop: {len(seen)}")
     stamp = 0
-    for directory in (plugin_dir(), shared_dir()):
+    # Same enumeration as the watermarks: the hook wrote its heartbeat wherever
+    # CLAUDE_PLUGIN_DATA pointed, and status reading only ~/.kollate said "last ran 10.09" on a
+    # Mac that had delivered a minute earlier (13.09).
+    for directory in data_dirs():
         try:
             with open(os.path.join(directory, "hook-seen")) as handle:
                 stamp = max(stamp, int(handle.read().strip() or 0))
