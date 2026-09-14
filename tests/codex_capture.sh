@@ -78,6 +78,20 @@ _skill = kollate._as_turn({"type": "response_item", "ordinal": 9, "timestamp": "
 check("the SKILL.md body is dropped", "Run the whole body" in _skill["message"]["content"], False)
 check("the skill name is what remains", _skill["message"]["content"], "$kollate:update")
 
+print("the real Codex thread name is read from session_index.jsonl")
+# Codex has no title inside the transcript; the name lives in ~/.codex/session_index.jsonl,
+# append-only, and /rename adds a new line - the last one wins (Gal, 14.09).
+_ch = tempfile.mkdtemp()
+with open(os.path.join(_ch, "session_index.jsonl"), "w") as _h:
+    _h.write(json.dumps({"id": "sid-1", "thread_name": "First auto name"}) + "\n")
+    _h.write(json.dumps({"id": "sid-2", "thread_name": "Someone else"}) + "\n")
+    _h.write(json.dumps({"id": "sid-1", "thread_name": "yossi"}) + "\n")  # a /rename, later line
+os.environ["CODEX_HOME"] = _ch
+check("a rename (the last line) wins", kollate.codex_thread_name("sid-1"), "yossi")
+check("another thread is unaffected", kollate.codex_thread_name("sid-2"), "Someone else")
+check("an unnamed thread has no name", kollate.codex_thread_name("sid-3"), None)
+del os.environ["CODEX_HOME"]
+
 print("deltas and marks")
 half = turns[0]["_offset"]
 later, later_end, _, _ = kollate.turns_from(transcript, half)

@@ -1240,6 +1240,14 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     if not turns:
         return
 
+    # Codex keeps the real thread name outside the transcript. Prefer it over the first-question
+    # fallback, and re-read it every delivery so a `/rename` propagates - the same behaviour as
+    # Claude's ai-title, so it stays auto (chosen=False) and a rename inside the Kollate app wins.
+    if source != "claude_code":
+        real = codex_thread_name(session_id)
+        if real:
+            title, title_chosen = real, False
+
     blocked = capture_blocked(session_id)
     if not blocked and dir_excluded(transcript_cwd(transcript)):
         blocked = "directory opted out"
@@ -1272,6 +1280,39 @@ def codex_sessions_root() -> str:
     if home:
         return os.path.join(home, "sessions")
     return os.path.expanduser(CODEX_SESSIONS_ROOT)
+
+
+def codex_thread_name(session_id: str) -> str | None:
+    """The name Codex shows for this thread, if it has one.
+
+    Codex has no title field inside the transcript (session_meta carries none), but it keeps a
+    display name per thread in `~/.codex/session_index.jsonl` - auto-derived and rewritten when
+    the user runs `/rename`. The file is append-only, so the LAST line for an id wins. Reading
+    it each delivery is what lets a rename propagate, exactly as Claude's `ai-title` does from
+    its own transcript. Absent (an unnamed thread), we fall back to the first question.
+
+    ponytail: a linear scan of a tiny file. It has held single digits of lines in practice; if
+    it ever grows large, read it backwards.
+    """
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    index = os.path.join(home, "session_index.jsonl")
+    name = None
+    try:
+        with open(index, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if session_id not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("id") == session_id:
+                    got = str(record.get("thread_name") or "").strip()
+                    if got:
+                        name = got  # keep scanning; a later line is a later rename
+    except OSError:
+        return None
+    return name[:200] if name else None
 
 
 def source_of(transcript: str) -> str:
