@@ -109,16 +109,15 @@ for verb in ("connect", "backfill"):
     check(f"{verb} stops before trying", done.returncode, 1)
     check(f"{verb} says why", "needs the network" in done.stdout, True)
     check(f"{verb} names the place it works", "terminal" in done.stdout, True)
-# update is NOT a failure inside the sandbox: it can never update from here, so printing the
-# two terminal commands IS the whole job. It must exit 0 (or Codex paints a red x on a
-# command that did exactly what it should) and just show the commands, no apology.
+# update is NOT a failure inside the sandbox: Codex auto-updates on restart, so explaining that
+# IS the whole job. It must exit 0 (or Codex paints a red x on a command that did exactly what
+# it should) and just tell the user to restart, no terminal commands, no apology.
 upd = subprocess.run([sys.executable, "plugins/kollate/hooks/kollate.py", "update"],
                      env=env, capture_output=True, text=True)
-check("update succeeds - printing the commands is the job", upd.returncode, 0)
-check("update names the terminal", "in a terminal" in upd.stdout, True)
-check("update shows codex's own upgrade commands",
-      "codex plugin marketplace upgrade kollate" in upd.stdout
-      and "codex plugin add kollate@kollate" in upd.stdout, True)
+check("update succeeds - explaining the restart is the job", upd.returncode, 0)
+check("update tells the user to restart Codex", "restart Codex" in upd.stdout, True)
+check("update names no terminal commands the user doesn't need",
+      "marketplace upgrade" not in upd.stdout and "codex plugin add" not in upd.stdout, True)
 check("update does not apologise about the network", "needs the network" in upd.stdout, False)
 check("and connecting explains the browser too",
       "opens a browser" in subprocess.run(

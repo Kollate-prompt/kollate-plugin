@@ -184,8 +184,8 @@ if os.name != "nt":
 
 print("the SessionStart hook nudges to update, with the right instructions for the tool")
 # Hooks run with network (unlike the sandboxed skill commands), so the update check lives here.
-# On Codex the nudge must name the terminal commands - $kollate:update in a session cannot
-# reach the network to update, so pointing at it would be a pointer to another pointer.
+# On Codex a restart IS the update - Codex auto-reinstalls latest on session start (proven
+# 2026-09-14), so the nudge says "restart", never a terminal command the user does not need.
 with tempfile.TemporaryDirectory() as _d:
     os.environ["CLAUDE_PLUGIN_DATA"] = _d
     os.environ["CLAUDE_PLUGIN_ROOT"] = os.path.expanduser("~/.codex/plugins/cache/kollate/kollate/9.9.9/hooks")  # host() -> codex
@@ -195,8 +195,8 @@ with tempfile.TemporaryDirectory() as _d:
                   open(os.path.join(_d, "update-check.json"), "w"))
         _n = kollate.update_nudge()
         check("a newer version produces a nudge", bool(_n), True)
-        check("naming codex's own update commands, not $kollate:update",
-              "codex plugin marketplace upgrade kollate" in _n and "codex plugin add kollate@kollate" in _n, True)
+        check("telling the user to restart Codex, not run any command",
+              "Restart Codex" in _n and "marketplace upgrade" not in _n, True)
         json.dump({"latest": "0.0.1", "checked_at": time.time()},
                   open(os.path.join(_d, "update-check.json"), "w"))
         check("and stays silent when already current", kollate.update_nudge(), "")
@@ -274,13 +274,14 @@ for _f in sorted(glob.glob("plugins/kollate/codex-skills/*/SKILL.md")):
     _t = open(_f).read()
     check(f"{_name}: no ${{CLAUDE_PLUGIN_ROOT}} command",
           'py -3 "${CLAUDE_PLUGIN_ROOT}' in _t or 'python3 "${CLAUDE_PLUGIN_ROOT}' in _t, False)
-    # update runs nothing at all - it just prints the two terminal commands (Codex has no
-    # network inside a session), so it neither needs nor mentions the script location.
+    # update runs nothing at all - it just tells the user to restart Codex (which auto-updates),
+    # so it neither needs nor mentions the script location.
     if _name != "update":
         check(f"{_name}: says where the script really is", "two folders up" in _t, True)
-check("update just prints the terminal commands, runs no script",
-      "codex plugin marketplace upgrade kollate" in open("plugins/kollate/codex-skills/update/SKILL.md").read()
-      and "kollate.py" not in open("plugins/kollate/codex-skills/update/SKILL.md").read(), True)
+_upd_skill = open("plugins/kollate/codex-skills/update/SKILL.md").read()
+check("update tells the user to restart Codex, runs no script and names no commands",
+      "restart Codex" in _upd_skill and "kollate.py" not in _upd_skill
+      and "marketplace upgrade" not in _upd_skill, True)
 
 print("update on Codex prunes the way the installers do")
 with tempfile.TemporaryDirectory(prefix="kollate-") as _home:

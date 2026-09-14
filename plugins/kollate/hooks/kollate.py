@@ -430,9 +430,10 @@ def update_nudge() -> str:
         # Code updates in place with /kollate:update. Name the real path for the tool in hand,
         # so the nudge is actionable, not a pointer to another pointer.
         if host() == "codex":
-            return ("\n" + KMARK + f"Kollate {latest} is out (you have {mine}). Update in a "
-                    "terminal: codex plugin marketplace upgrade kollate && codex plugin add "
-                    "kollate@kollate - then restart Codex.")
+            # Codex auto-reinstalls latest on session start, so this rarely shows at all - but
+            # when it does, a restart is the whole fix, not any terminal command.
+            return ("\n" + KMARK + f"Kollate {latest} is out (you have {mine}). Restart Codex to "
+                    "update - it reinstalls the latest version automatically.")
         # Calm one-liner by the client's request (28.08) - the old yellow block read as an
         # alarm. Leads with /kollate:update because a relaunch alone fetches nothing.
         return ("\n" + KMARK + f"Run {command('update')} and relaunch Claude: version " + latest)
@@ -1570,13 +1571,14 @@ def network_refused(verb: str) -> int:
     """
     script = os.path.abspath(__file__)
     if verb == "update":
-        # A skill's command can never update from inside a session (no network here), so
-        # printing the two terminal commands IS the whole job - not a failure. Say it plainly
-        # and exit 0, or Codex paints a red x on a command that did exactly what it should.
-        print(f"{KMARK}Update Kollate by running these in a terminal (not inside Codex):")
-        print("  codex plugin marketplace upgrade kollate && codex plugin add kollate@kollate")
-        print("Then start a new Codex session. Re-running the install command does the same and "
-              "also tidies old versions.")
+        # Codex re-syncs the git marketplace and reinstalls the newest version on every session
+        # start (proven 2026-09-14: a plain restart replaced 0.4.68 with 0.4.71, no CLI run).
+        # So there is nothing to run - a restart IS the update. Saying "run these commands" was
+        # telling the user to do by hand what Codex already does for them. Exit 0: this command
+        # did its whole job by explaining, so Codex must not paint a red x on it.
+        print(f"{KMARK}Codex keeps Kollate up to date automatically.")
+        print("Just restart Codex (quit and reopen, or start a new session) - it reinstalls the "
+              "latest version from the marketplace on its own. There is nothing to run.")
         return 0
     print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
     print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"

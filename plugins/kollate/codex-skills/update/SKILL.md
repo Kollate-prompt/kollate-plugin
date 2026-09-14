@@ -4,8 +4,6 @@ description: Update the Kollate plugin to the newest version
 ---
 Show the user exactly this, and nothing else:
 
-Update Kollate by running these in a terminal (not inside Codex):
-  codex plugin marketplace upgrade kollate && codex plugin add kollate@kollate
-Then start a new Codex session.
+Codex keeps Kollate up to date on its own. To get the newest version, just restart Codex (quit and reopen, or start a new session) - it reinstalls the latest version from the marketplace automatically. There is nothing to run.
 
-Do not run any command yourself - Codex has no network inside a session, so it cannot update from here. Do not look for scripts or files.
+Do not run any command yourself. Do not print terminal commands. Do not look for scripts or files.
