@@ -904,6 +904,27 @@ def _codex_scaffolding(content) -> bool:
         and closing.replace("_", "").isalnum()
 
 
+def _skill_name(content) -> str | None:
+    """A Codex skill invocation, reduced to just its name (e.g. `$kollate:update`).
+
+    Invoking a skill sends the ENTIRE SKILL.md as a user turn, wrapped as
+    `<skill><name>kollate:update</name><path>…</path>---…the whole body…</skill>`. Stored whole
+    it buries the conversation in instructions and steals the title. We keep only the name -
+    the whole treatment of skill turns can come later; for now the name is all that's useful.
+    """
+    text = _flatten(content).strip()
+    if not text.startswith("<skill>"):
+        return None
+    a = text.find("<name>")
+    b = text.find("</name>")
+    if a == -1 or b == -1 or b < a:
+        return None
+    name = text[a + len("<name>"):b].strip()
+    if not name:
+        return None
+    return name if name.startswith("$") else "$" + name
+
+
 def _as_turn(record: dict) -> dict:
     """Codex's record shape, translated into Claude Code's.
 
@@ -918,8 +939,18 @@ def _as_turn(record: dict) -> dict:
     if payload.get("type") != "message":
         return {}  # reasoning, tool calls, session_meta - noise, same as Claude Code's
     role = payload.get("role")
-    if role == "user" and _codex_scaffolding(payload.get("content")):
-        return {}
+    if role == "user":
+        name = _skill_name(payload.get("content"))
+        if name is not None:
+            # A skill turn: keep the name, drop the SKILL.md body it was wrapped around.
+            return {
+                "type": role,
+                "message": {"role": role, "content": name},
+                "uuid": f"{record.get('ordinal')}" if record.get("ordinal") is not None else None,
+                "timestamp": record.get("timestamp"),
+            }
+        if _codex_scaffolding(payload.get("content")):
+            return {}
     return {
         "type": role,
         "message": {"role": role, "content": payload.get("content")},

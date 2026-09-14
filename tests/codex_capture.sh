@@ -69,6 +69,15 @@ check("prose mentioning a tag is not",
       kollate._codex_scaffolding([{"type": "input_text", "text": "why does <div> break here?"}]), False)
 check("an empty message is not", kollate._codex_scaffolding([]), False)
 
+print("skill invocations are reduced to their name")
+# Invoking a Codex skill sends the whole SKILL.md as a user turn. Stored whole it buries the
+# conversation and steals the title (Eyal's workspace, 14.09). Keep only the name.
+_skill = kollate._as_turn({"type": "response_item", "ordinal": 9, "timestamp": "t",
+    "payload": {"type": "message", "role": "user", "content": [{"type": "input_text",
+    "text": "<skill>\n<name>kollate:update</name>\n<path>/x/SKILL.md</path>\n---\nname: update\nRun the whole body...\n\n</skill>"}]}})
+check("the SKILL.md body is dropped", "Run the whole body" in _skill["message"]["content"], False)
+check("the skill name is what remains", _skill["message"]["content"], "$kollate:update")
+
 print("deltas and marks")
 half = turns[0]["_offset"]
 later, later_end, _, _ = kollate.turns_from(transcript, half)
