@@ -293,6 +293,23 @@ def command(verb: str) -> str:
     return f"$kollate:{verb}" if host() == "codex" else f"/kollate:{verb}"
 
 
+def terminal_command(verb: str) -> str:
+    """The exact, copy-pasteable command to run VERB in the user's own terminal.
+
+    It names the interpreter by its ABSOLUTE path (sys.executable - the very Python already
+    running this hook), never `python3`. Two reasons this matters on Windows, both learned the
+    hard way (15.09): `python3` there is a Microsoft Store stub that prints "Python was not
+    found" and does nothing, and Codex's bundled Python is not on the user's PATH - it is only
+    reachable by full path. A command with a bare `python3`/`python` sends a no-Python user to a
+    dead end (the exact stuck state a real user hit). sys.executable is whatever actually ran
+    the hook - Codex's bundled Python in the desktop app and CLI, the system Python on macOS -
+    so the printed line works as-is in any shell, with nothing to install and no PATH setup.
+    """
+    script = os.path.abspath(__file__)
+    extra = (" " + " ".join(sys.argv[2:])) if len(sys.argv) > 2 else ""
+    return f'"{sys.executable}" "{script}" {verb}{extra}'
+
+
 def hook_seen_path() -> str:
     return os.path.join(plugin_dir(), "hook-seen")
 
@@ -1570,7 +1587,6 @@ def network_refused(verb: str) -> int:
     workspace, so inside Codex they would fail one layer down, as a curl that returned nothing.
     Better to say so before trying, and name the place it does work.
     """
-    script = os.path.abspath(__file__)
     if verb == "update":
         # Codex re-syncs the git marketplace and reinstalls the newest version on every session
         # start (proven 2026-09-14: a plain restart replaced 0.4.68 with 0.4.71, no CLI run).
@@ -1582,8 +1598,7 @@ def network_refused(verb: str) -> int:
               "latest version from the marketplace on its own. There is nothing to run.")
         return 0
     print(f"{KMARK}{command(verb)} needs the network, and Codex runs this command without one.")
-    print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
-          + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
+    print(f"Run it in a terminal instead:  {terminal_command(verb)}")
     if verb == "connect":
         print("Connecting also opens a browser to sign you in, which only a terminal can do.")
     return 1
@@ -1601,12 +1616,10 @@ def state_unwritable(verb: str, problem: OSError) -> int:
     changes machine-wide state, so under Codex this is the expected failure, not a bug, and
     the person needs the one thing that does work - the same command in their own terminal.
     """
-    script = os.path.abspath(__file__)
     print(f"{KMARK}Nothing was changed - {shared_dir()} could not be written ({problem.strerror}).")
     if host() == "codex":
         print("Codex runs this inside a sandbox that cannot write outside your project.")
-        print(f"Run it in a terminal instead:  python3 \"{script}\" {verb}"
-              + (" " + " ".join(sys.argv[2:]) if sys.argv[2:] else ""))
+        print(f"Run it in a terminal instead:  {terminal_command(verb)}")
         print("To let Codex do it in future, add this to ~/.codex/config.toml "
               "(the installer does it for you):")
         print(f'  [sandbox_workspace_write]\n  writable_roots = ["{shared_dir()}"]')
@@ -1659,9 +1672,16 @@ def main() -> int:
                 # Installed but never connected: say so in red, once per session. Silence here
                 # reads as "working", which is the exact confusion the client hit (28.08).
                 RED, DIM, RST = "\033[31m", "\033[2m", "\033[0m"
+                # Give the ready-to-paste command, not just "$kollate:connect". Connecting needs
+                # network + a browser, which Codex blocks inside a session, so it has to run in
+                # the user's own terminal - and there `python3` is not there (Store stub on
+                # Windows) and Codex's Python is off-PATH. terminal_command() names the exact
+                # interpreter by full path, so this one line works as-is. This is the fix for
+                # the desktop user who installed, trusted hooks, and then had no way to connect.
                 print(json.dumps({"systemMessage":
                     f"{RED}\u2715{RST} {DIM}Kollate is not recording - this machine is not "
-                    f"connected. {RST}{RED}{command('connect')}{RST}{DIM} sets it up.{RST}"
+                    f"connected. To connect, paste this into a terminal (PowerShell on "
+                    f"Windows) and press Enter:{RST}\n{terminal_command('connect')}"
                     ,
                     "suppressOutput": True}))
             if creds["capture_token"] and creds["endpoint"]:
