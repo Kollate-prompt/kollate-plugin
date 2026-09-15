@@ -307,7 +307,14 @@ def terminal_command(verb: str) -> str:
     """
     script = os.path.abspath(__file__)
     extra = (" " + " ".join(sys.argv[2:])) if len(sys.argv) > 2 else ""
-    return f'"{sys.executable}" "{script}" {verb}{extra}'
+    cmd = f'"{sys.executable}" "{script}" {verb}{extra}'
+    # On Windows the user pastes this into PowerShell, where a line that STARTS with a quoted
+    # string is parsed as a string literal, not a command - it fails with "Unexpected token"
+    # (seen 15.09). The call operator `&` tells PowerShell to run it. bash/zsh need no prefix
+    # (and a leading `&` there would background the job), so add it only on Windows.
+    if os.name == "nt":
+        cmd = "& " + cmd
+    return cmd
 
 
 def hook_seen_path() -> str:
@@ -2029,12 +2036,20 @@ def connect() -> int:
         f"{endpoint}/connect-machine?redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
         f"&state={state}&label={urllib.parse.quote(label, safe='')}"
     )
-    print(KMARK + "Opening your browser to sign in to Kollate...")
-    # ALWAYS print the link. webbrowser.open() returning True proves nothing on the desktop
-    # app (30.08: a Windows user sat in front of "visit the link it provided" with no link
-    # anywhere and the flow timed out). The URL is made to be visited - it is not a secret.
-    webbrowser.open(url)
-    print(f"If no browser tab opened, use this link to sign in:\n  {url}")
+    # Print the sign-in link FIRST and flush it, before the browser attempt and before the
+    # 185s wait below. In the desktop app, connect runs as an agent tool-call after the user
+    # clicks "Allow ... connect to the network and open the sign-in browser": the sandbox
+    # cannot actually launch the user's browser (15.09: "I pressed allow but no browser
+    # opened"), so the connect skill surfaces THIS line as a clickable link instead. Putting it
+    # first (and flushing) means the user has something to click while the server waits. The
+    # URL is made to be visited - it is not a secret. (30.08: a Windows user once sat in front
+    # of "visit the link it provided" with no link anywhere; hence: always print it, up front.)
+    print(f"{KMARK}Sign in to Kollate here:\n  {url}")
+    sys.stdout.flush()
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
 
     thread.join(timeout=185)
     print(outcome.get("message") or "Sign-in did not complete. Nothing was changed.")
