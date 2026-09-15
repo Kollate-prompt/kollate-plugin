@@ -1775,7 +1775,14 @@ def main() -> int:
         return network_refused("update") if no_network() else cmd_update()
 
     if verb == "connect":
-        return network_refused("connect") if no_network() else connect()
+        # Do NOT pre-refuse on CODEX_SANDBOX_NETWORK_DISABLED. When the user approves the
+        # desktop app's "allow network and open the sign-in browser" prompt, the command runs
+        # WITH network - but Codex leaves that flag set, so pre-refusing made the approval
+        # pointless: it asked permission and then never tried (15.09, "what's the point of
+        # asking approval and then not open the browser"). Just attempt it. connect()'s own
+        # reachability probe is the real gate and falls back to the terminal line if the
+        # network genuinely is not there.
+        return connect()
 
     return 0
 
