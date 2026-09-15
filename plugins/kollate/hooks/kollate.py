@@ -794,9 +794,10 @@ def cmd_status() -> int:
         lines.append("Hooks: approved, but not run yet - they fire when a session STARTS. Quit "
                      "Codex completely and open it again; this session cannot capture itself.")
     elif host() == "codex":
-        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you approve it. Run "
-                     "/hooks in Codex's command box and trust Kollate's, then quit Codex and "
-                     "open it again. Nothing is captured until you do.")
+        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you trust it. When "
+                     "Codex starts it shows a \"Hooks need review\" prompt - choose \"Trust all "
+                     "and continue\" (or press t on the hooks table). Then quit Codex completely "
+                     "and open it again. Nothing is captured until you do.")
     else:
         lines.append("Hooks: never run - restart your session; if it persists, reinstall.")
 
@@ -1687,7 +1688,7 @@ def main() -> int:
                             f"{BLD}This workspace's sessions are being recorded and uploaded to "
                             f"Kollate{RST} ({CYA}{creds['endpoint']}/app/conversations{RST}) as "
                             "organisational memory, readable by everyone in your workspace. "
-                            "Captured: your messages and Claude's replies. Never captured: "
+                            "Captured: your messages and the agent's replies. Never captured: "
                             "thinking, tool output, file contents. "
                             f"{YEL}To keep THIS working directory out of Kollate, run "
                             f"{command('pause')} and choose 'this directory'.{RST} "
