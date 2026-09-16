@@ -905,13 +905,87 @@ def cmd_doctor() -> int:
             continue
         seen.add(path)
         lines.append(f"  {path}\n    -> {probe(path)}")
+    # A single run should catch a home/profile split without a second run in the terminal:
+    # look for the credential under EVERY user profile, not just this process's ~.
+    lines.append("broad credentials.json search (all profiles):")
+    users_root = os.path.dirname(os.path.expanduser("~"))  # e.g. C:\Users or /Users
+    found = []
+    for sub in (os.path.join("*", ".kollate", "credentials.json"),
+                os.path.join("*", ".codex", "plugins", "data", "*kollate*", "credentials.json"),
+                os.path.join("*", ".claude", "plugins", "data", "*kollate*", "credentials.json")):
+        try:
+            found += glob.glob(os.path.join(users_root, sub))
+        except Exception:
+            pass
+    for path in sorted(set(found)):
+        lines.append(f"  {path}\n    -> {probe(path)}")
+    if not found:
+        lines.append("  (none found)")
+
+    lines.append(f"contents of {shared_dir()}:")
+    try:
+        for name in sorted(os.listdir(shared_dir())):
+            fp = os.path.join(shared_dir(), name)
+            try:
+                sz = os.path.getsize(fp)
+                mt = datetime.datetime.fromtimestamp(os.path.getmtime(fp)).strftime("%m-%d %H:%M:%S")
+            except OSError:
+                sz, mt = "?", "?"
+            lines.append(f"  {name}  ({sz}b, {mt})")
+    except OSError as exc:
+        lines.append(f"  (cannot list: {exc.strerror})")
+
     lines.append(f"codex hooks trusted: {codex_hooks_trusted()}")
+    codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    cfg = os.path.join(codex_home, "config.toml")
+    lines.append(f"config.toml hooks.state (from {cfg}):")
+    try:
+        matched = [ln.strip() for ln in open(cfg, encoding="utf-8") if "hooks.state" in ln and "kollate" in ln]
+        for ln in matched:
+            lines.append(f"  {ln}")
+        if not matched:
+            lines.append("  (no kollate hook-trust entries - hooks are NOT registered/trusted)")
+    except OSError as exc:
+        lines.append(f"  (cannot read: {exc.strerror})")
+
+    hc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks-codex.json")
+    lines.append(f"installed hook commands ({hc}):")
+    try:
+        hj = json.loads(open(hc, "rb").read().decode("utf-8"))
+        for event, groups in hj.get("hooks", {}).items():
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    lines.append(f"  {event}: {hook.get('command')}")
+    except Exception as exc:
+        lines.append(f"  (cannot read: {type(exc).__name__})")
+
     lines.append("hook-seen / delivered.json:")
     for directory in data_dirs():
-        hs = os.path.join(directory, "hook-seen")
-        dv = os.path.join(directory, "delivered.json")
-        lines.append(f"  {directory}: hook-seen={'yes' if os.path.exists(hs) else 'no'} "
-                     f"delivered={'yes' if os.path.exists(dv) else 'no'}")
+        parts = []
+        for name in ("hook-seen", "delivered.json"):
+            fp = os.path.join(directory, name)
+            if os.path.exists(fp):
+                try:
+                    mt = datetime.datetime.fromtimestamp(os.path.getmtime(fp)).strftime("%m-%d %H:%M:%S")
+                except OSError:
+                    mt = "?"
+                parts.append(f"{name}={mt}")
+            else:
+                parts.append(f"{name}=no")
+        lines.append(f"  {directory}: {'  '.join(parts)}")
+
+    sroot = os.path.expanduser(CODEX_SESSIONS_ROOT)
+    lines.append(f"recent codex sessions ({sroot}):")
+    try:
+        files = glob.glob(os.path.join(sroot, "**", "*.jsonl"), recursive=True)
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        lines.append(f"  total files: {len(files)}")
+        for path in files[:3]:
+            mt = datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%m-%d %H:%M:%S")
+            lines.append(f"  {mt}  {path}")
+    except Exception as exc:
+        lines.append(f"  (cannot list: {type(exc).__name__})")
+
     print("\n".join(lines))
     return 0
 
