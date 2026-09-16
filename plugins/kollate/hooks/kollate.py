@@ -846,6 +846,76 @@ def cmd_status() -> int:
     return 0
 
 
+def cmd_doctor() -> int:
+    """Dump where everything resolves and which credential files hold a token.
+
+    Built to debug the desktop-app "connected in a terminal, Connected: NO in the app" split.
+    Run it in a terminal AND inside the desktop app and compare: if the two disagree on
+    expanduser("~") / plugin_dir(), or on which credentials.json parses and holds a token, that
+    is the bug. Prints NO secret values - only booleans, paths, sizes and timestamps - so it is
+    safe to screenshot and send.
+    """
+    import datetime
+    import glob
+
+    def probe(path: str) -> str:
+        if not os.path.exists(path):
+            return "MISSING"
+        try:
+            size = os.path.getsize(path)
+            mt = datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%m-%d %H:%M:%S")
+        except OSError:
+            size, mt = "?", "?"
+        # Read as bytes first so an encoding problem shows as a parse error, not a crash - this
+        # is exactly the "Hebrew / bad escape in the file" hypothesis, made visible.
+        try:
+            raw = open(path, "rb").read()
+        except OSError as exc:
+            return f"UNREADABLE ({exc.strerror})"
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            return f"PARSE-ERROR {type(exc).__name__} (bytes={size}, {mt})"
+        keys = ",".join(sorted(data.keys())) if isinstance(data, dict) else "(not-object)"
+        tok = bool(isinstance(data, dict) and data.get("capture_token"))
+        api = bool(isinstance(data, dict) and data.get("api_base"))
+        return f"OK token={tok} api_base={api} keys=[{keys}] bytes={size} {mt}"
+
+    lines = [f"{KMARK}Kollate doctor  (no secrets printed)"]
+    lines.append(f"version: {current_version() or 'unknown'}   host: {host()}")
+    lines.append(f"expanduser(~): {os.path.expanduser('~')}")
+    lines.append(f"getcwd(): {os.getcwd()}")
+    lines.append(f"sys.executable: {sys.executable}")
+    for var in ("USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "CLAUDE_PLUGIN_DATA",
+                "CLAUDE_PLUGIN_ROOT", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+                "CODEX_SANDBOX_NETWORK_DISABLED"):
+        lines.append(f"env {var} = {os.environ.get(var) or '(unset)'}")
+    lines.append(f"plugin_dir(): {plugin_dir()}")
+    lines.append(f"shared_dir(): {shared_dir()}")
+    creds = credentials()
+    lines.append(f"credentials() -> token={bool(creds.get('capture_token'))} "
+                 f"api_base={bool(creds.get('api_base'))} endpoint={creds.get('endpoint') or '(none)'}")
+    lines.append("credentials.json seen at:")
+    candidates = [credentials_path(), os.path.join(shared_dir(), "credentials.json")]
+    for directory in data_dirs():
+        candidates.append(os.path.join(directory, "credentials.json"))
+    seen = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        lines.append(f"  {path}\n    -> {probe(path)}")
+    lines.append(f"codex hooks trusted: {codex_hooks_trusted()}")
+    lines.append("hook-seen / delivered.json:")
+    for directory in data_dirs():
+        hs = os.path.join(directory, "hook-seen")
+        dv = os.path.join(directory, "delivered.json")
+        lines.append(f"  {directory}: hook-seen={'yes' if os.path.exists(hs) else 'no'} "
+                     f"delivered={'yes' if os.path.exists(dv) else 'no'}")
+    print("\n".join(lines))
+    return 0
+
+
 def cmd_resume() -> int:
     try:
         os.remove(pause_path())
@@ -1770,6 +1840,9 @@ def main() -> int:
 
     if verb == "status":
         return cmd_status()
+
+    if verb == "doctor":
+        return cmd_doctor()
 
     if verb == "update":
         return network_refused("update") if no_network() else cmd_update()
