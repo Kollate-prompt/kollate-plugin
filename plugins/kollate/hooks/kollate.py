@@ -1989,7 +1989,22 @@ def connect() -> int:
         for target in {credentials_path(), os.path.join(shared_dir(), "credentials.json")}:
             write_json_private(target, credential)
         enrolled_at()
-        message = KMARK + "Connected. New Claude Code conversations on this machine will be saved to Kollate."
+        # Surface-accurate: connect usually runs in a terminal, but the plugin's own path
+        # tells us which tool it belongs to, so a Codex user is not told "Claude Code".
+        tool = "Codex" if host() == "codex" else "Claude Code"
+        message = KMARK + f"Connected. New {tool} conversations on this machine will be saved to Kollate."
+        # The credential is now on disk, but a tool that is ALREADY running read its plugin
+        # and credential at startup and will not pick this up until it restarts. This was the
+        # exact miss: a user connected, saw "Connected", and nothing captured because nobody
+        # said to reopen the app (16.09).
+        if host() == "codex":
+            message += (" Now fully quit and reopen your app so it starts capturing: the ChatGPT "
+                        "desktop app must be quit from the system tray (Quit - closing the window "
+                        "is not enough), or start a new Codex session. A session already running "
+                        "will not pick this up until you do.")
+        else:
+            message += (" Start a new session to begin capturing - one already running will not "
+                        "pick this up until you do.")
         blocked = capture_blocked("")
         if blocked:
             message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
