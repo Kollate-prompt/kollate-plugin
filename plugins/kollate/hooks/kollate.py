@@ -335,6 +335,26 @@ def note_hook_ran() -> None:
             handle.write(str(int(time.time())))
     except OSError:
         pass
+    # A per-invocation log, kept in the stable shared dir (never the swappable plugin cache),
+    # so $kollate:doctor can prove whether a hook actually fired and from which plugin-cache
+    # path. If a hook logs a `file=` under a version dir that no longer exists, that is the
+    # openai/codex #31383 stale-${PLUGIN_ROOT} race after a startup marketplace auto-upgrade.
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+        entry = (f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t"
+                 f"{(sys.argv[1] if len(sys.argv) > 1 else '?')}\t"
+                 f"file={here}\tfile_exists={os.path.isdir(here)}\t"
+                 f"PLUGIN_ROOT={root or '-'}\troot_exists={(os.path.isdir(root) if root else '-')}")
+        log = os.path.join(shared_dir(), "hook.log")
+        try:
+            kept = open(log, encoding="utf-8").read().splitlines()[-49:]
+        except OSError:
+            kept = []
+        with open(log, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(kept + [entry]) + "\n")
+    except Exception:
+        pass
 
 
 def pause_path() -> str:
@@ -973,6 +993,32 @@ def cmd_doctor() -> int:
             else:
                 parts.append(f"{name}=no")
         lines.append(f"  {directory}: {'  '.join(parts)}")
+
+    # Plugin-cache churn: the #31383 race is a startup auto-upgrade swapping this dir. Multiple
+    # version dirs, or a "runs from" path that is not the newest, is the fingerprint.
+    cache = os.path.join(codex_home, "plugins", "cache", "kollate", "kollate")
+    lines.append(f"plugin cache versions ({cache}):")
+    try:
+        for name in sorted(os.listdir(cache)):
+            d = os.path.join(cache, name)
+            try:
+                mt = datetime.datetime.fromtimestamp(os.path.getmtime(d)).strftime("%m-%d %H:%M:%S")
+            except OSError:
+                mt = "?"
+            lines.append(f"  {name}  (mtime {mt})")
+    except OSError as exc:
+        lines.append(f"  (cannot list: {exc.strerror})")
+    lines.append(f"this doctor runs from: {os.path.dirname(os.path.abspath(__file__))}")
+
+    lines.append(f"hook.log tail ({os.path.join(shared_dir(), 'hook.log')}):")
+    try:
+        tail = open(os.path.join(shared_dir(), "hook.log"), encoding="utf-8").read().splitlines()[-8:]
+        for ln in tail:
+            lines.append(f"  {ln}")
+        if not tail:
+            lines.append("  (empty - no hook has run since logging was added)")
+    except OSError:
+        lines.append("  (no hook.log yet - no hook has run since this version was installed)")
 
     sroot = os.path.expanduser(CODEX_SESSIONS_ROOT)
     lines.append(f"recent codex sessions ({sroot}):")
