@@ -2227,6 +2227,16 @@ def connect() -> int:
                         f"run {command('resume')} to actually start.")
         return True, message + install_statusline()
 
+    # Chrome opens several speculative connections to a loopback redirect (preconnect) and
+    # can replay the callback across them. A single-threaded server blocks on the first idle
+    # preconnect socket for its whole timeout while the real /callback waits behind it - the
+    # browser then sits on "connecting" for 30s+ and gives up (17.09: a Windows connect hung
+    # for over a minute, net::ERR on the callback). The server below is threaded so every
+    # connection is answered at once; this lock makes the one-time code redeem EXACTLY once,
+    # so a duplicate callback cannot fail with "already used" and overwrite a success.
+    redeem_lock = threading.Lock()
+    redeemed: dict[str, object] = {}
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib naming
             parsed = urllib.parse.urlparse(self.path)
@@ -2239,27 +2249,37 @@ def connect() -> int:
                 return
 
             received = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-            # Redeem BEFORE answering. The page is the only thing most people read, so it
-            # must not say "connected" while the exchange is still ahead of it and able to
-            # fail - the terminal they were told to walk away from would be the only place
-            # that ever said otherwise.
-            try:
-                ok, message = finish(received)
-            except Exception:
-                ok, message = False, "Could not complete the connection. Nothing was changed."
-            outcome["ok"], outcome["message"] = ok, message
+            # Redeem BEFORE answering, and only once. The page is the only thing most people
+            # read, so it must not say "connected" while the exchange is still ahead of it and
+            # able to fail - the terminal they were told to walk away from would be the only
+            # place that ever said otherwise.
+            with redeem_lock:
+                if "ok" not in redeemed:
+                    try:
+                        redeemed["ok"], redeemed["message"] = finish(received)
+                    except Exception:
+                        redeemed["ok"], redeemed["message"] = (
+                            False, "Could not complete the connection. Nothing was changed.")
+            ok, message = redeemed["ok"], redeemed["message"]
 
             body = done_page(ok, endpoint).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+            except OSError:
+                return  # a cancelled preconnect closed on us; the real one still lands
+            # Signal the waiting main thread only after a full page has been delivered.
+            outcome["ok"], outcome["message"] = ok, message
 
         def log_message(self, *args):  # keep the terminal clean
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.daemon_threads = True
     server.timeout = 30
 
     def serve_until_answered() -> None:
