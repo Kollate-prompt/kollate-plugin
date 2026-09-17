@@ -371,8 +371,19 @@ def current_version() -> str:
         return ""
 
 
+# ANSI colour renders in the Claude Code TUI, but the ChatGPT desktop app (Codex) prints hook
+# output as plain text and shows the escape codes as raw garbage (17.09: the recording notice
+# arrived as "[1m[38;2;204;240;63m..."). Strip colour on the Codex surface - the comment on the
+# notice already says the words must carry the meaning wherever codes are stripped.
+_CODEX_SURFACE = host() == "codex"
+
+
+def _ansi(code: str) -> str:
+    return "" if _CODEX_SURFACE else code
+
+
 # The Kollate mark - the logo's lime X - leads every user-facing message.
-KMARK = "\033[1m\033[38;2;204;240;63m\u2715\033[0m "
+KMARK = _ansi("\033[1m\033[38;2;204;240;63m") + "\u2715" + _ansi("\033[0m") + " "
 
 def update_cache_path() -> str:
     return os.path.join(plugin_dir(), "update-check.json")
@@ -1891,7 +1902,7 @@ def main() -> int:
             if not (creds["capture_token"] and creds["endpoint"]):
                 # Installed but never connected: say so in red, once per session. Silence here
                 # reads as "working", which is the exact confusion the client hit (28.08).
-                RED, DIM, RST = "\033[31m", "\033[2m", "\033[0m"
+                RED, DIM, RST = _ansi("\033[31m"), _ansi("\033[2m"), _ansi("\033[0m")
                 # Give the ready-to-paste command, not just "$kollate:connect". Connecting needs
                 # network + a browser, which Codex blocks inside a session, so it has to run in
                 # the user's own terminal - and there `python3` is not there (Store stub on
@@ -1912,8 +1923,8 @@ def main() -> int:
                 # ANSI dress-up: hook systemMessages render in the terminal TUI, where a
                 # wall of grey is exactly how a consent notice gets skimmed past. Colour is
                 # cosmetic - the words alone must carry the meaning wherever codes are stripped.
-                RED, YEL, CYA, BLD, DIM, RST = ("\033[31m", "\033[33m", "\033[36m",
-                                                "\033[1m", "\033[2m", "\033[0m")
+                RED, YEL, CYA, BLD, DIM, RST = (_ansi("\033[31m"), _ansi("\033[33m"), _ansi("\033[36m"),
+                                                _ansi("\033[1m"), _ansi("\033[2m"), _ansi("\033[0m"))
                 # The Kollate mark at glyph size: a four-pointed star in brand lime -
                 # vector-crisp at any font size, unlike raster art in a character grid.
                 MARK = KMARK.rstrip()
