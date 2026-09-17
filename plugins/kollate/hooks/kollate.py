@@ -1051,31 +1051,53 @@ def cmd_resume() -> int:
     return 0
 
 
-def enrolled_at() -> float:
-    """The moment this machine was connected. Older transcripts are never captured (§2.4)."""
-    path = os.path.join(plugin_dir(), "enrolled_at")
+def _write_stamp(directory: str, value: float) -> None:
     try:
-        stamp = float(open(path, encoding="utf-8").read().strip())
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        fd = os.open(os.path.join(directory, "enrolled_at"),
+                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(value))
+    except OSError:
+        pass
+
+
+def enrolled_at() -> float:
+    """The moment this machine was connected. Older transcripts are never captured (§2.4).
+
+    Enrolment is stamped by whichever surface connected. `$kollate:connect` runs as a skill,
+    where CLAUDE_PLUGIN_DATA is unset, so it lands in ~/.kollate (shared_dir); the first hook
+    run has CLAUDE_PLUGIN_DATA set, so plugin_dir() is CODEX_HOME/plugins/data. Reading only
+    plugin_dir() meant the hook, finding no stamp there, wrote a fresh "now" AFTER connect -
+    later than the conversation already on screen - so the FIRST real session looked "older
+    than enrolment" and was silently dropped (Windows desktop, spaced profile, 17.09). Enrolment
+    is the moment of FIRST connect, so take the earliest stamp found in either location: correct
+    by definition, and it self-heals a machine already carrying a too-late stamp.
+    """
+    stamps = []
+    for directory in (shared_dir(), plugin_dir()):
+        try:
+            stamps.append(float(open(os.path.join(directory, "enrolled_at"),
+                                     encoding="utf-8").read().strip()))
+        except Exception:
+            pass
+    now = time.time()
+    if stamps:
+        stamp = min(stamps)
         # A machine whose clock was wrong when it connected would stamp enrolment in the
         # future, and then every transcript looks "older than enrolment" and is silently
         # skipped for good (seen on the Windows bench 30.08, clock 7h fast). A stamp that
-        # cannot be true is corrected rather than obeyed.
-        if stamp > time.time() + 300:
-            stamp = time.time()
-            try:
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(str(stamp))
-            except OSError:
-                pass
+        # cannot be true is corrected rather than obeyed, in both locations.
+        if stamp > now + 300:
+            stamp = now
+            for directory in (shared_dir(), plugin_dir()):
+                _write_stamp(directory, stamp)
         return stamp
-    except Exception:
-        now = time.time()
-        os.makedirs(plugin_dir(), mode=0o700, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(str(now))
-        return now
+    # Never stamped anywhere (a pasted-key setup with no connect step): stamp now, in both
+    # places, so whichever context reads next agrees on the same moment.
+    for directory in (shared_dir(), plugin_dir()):
+        _write_stamp(directory, now)
+    return now
 
 
 # ----------------------------------------------------------------------------- compaction
@@ -1429,7 +1451,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     # so the first captured turn stamps it instead - and that session starts from here rather
     # than being swallowed whole. Capturing what was said before anyone enrolled is the thing
     # §2.4 forbids; refusing to capture the session you are sitting in is just broken.
-    first_run = not os.path.exists(os.path.join(plugin_dir(), "enrolled_at"))
+    first_run = not any(os.path.exists(os.path.join(d, "enrolled_at"))
+                        for d in (shared_dir(), plugin_dir()))
     cutoff = enrolled_at()
     try:
         if first_run and not ignore_enrolment:

@@ -6,7 +6,8 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd capture",
-            "timeout": 3
+            "commandWindows": "cmd /c \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd\" capture",
+            "timeout": 15
           }
         ]
       }
@@ -17,6 +18,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd capture",
+            "commandWindows": "cmd /c \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd\" capture",
             "timeout": 3
           }
         ]
@@ -29,7 +31,8 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd reconcile",
-            "timeout": 3
+            "commandWindows": "cmd /c \"${CLAUDE_PLUGIN_ROOT}/hooks/kollate-hook.cmd\" reconcile",
+            "timeout": 15
           }
         ]
       }
