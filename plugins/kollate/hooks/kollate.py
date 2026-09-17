@@ -210,12 +210,27 @@ def unpack_machine_key(value: str) -> dict:
         return {}
 
 
+def credential_locations() -> list:
+    """Every credentials.json this machine might hold, found rather than assumed.
+
+    Mirrors watermark_locations(). A skill's shell has no CLAUDE_PLUGIN_DATA, so plugin_dir()
+    and shared_dir() both collapse to ~/.kollate and miss the Codex plugins/data dir where
+    connect (which runs with CLAUDE_PLUGIN_DATA set) actually wrote the credential. That is the
+    "$kollate:status says Connected: NO while capture works" split-brain (17.09, Dror): the hook
+    read the credential fine and delivered, but status only ever looked in ~/.kollate. plugin_dir()
+    stays first so the hook keeps reading its own dir authoritatively.
+    """
+    return [os.path.join(d, "credentials.json") for d in data_dirs()]
+
+
 def credentials() -> dict:
     """Stored credential from /kollate:connect, else the no-browser setup key."""
-    stored = read_json(credentials_path(), {})
-    if not stored.get("capture_token"):
-        # Connected from the other surface on this same machine.
-        stored = read_json(os.path.join(shared_dir(), "credentials.json"), {})
+    stored = {}
+    for path in credential_locations():
+        found = read_json(path, {})
+        if found.get("capture_token"):
+            stored = found
+            break
     pasted = unpack_machine_key(os.environ.get("CLAUDE_PLUGIN_OPTION_CAPTURE_TOKEN", "").strip())
     token = stored.get("capture_token") or pasted.get("capture_token", "")
     secret = stored.get("hook_secret") or pasted.get("hook_secret", "")
@@ -800,6 +815,22 @@ def tidy_codex_install() -> int:
     return len(versions) - 1
 
 
+def restart_banner(reason_lines: list) -> list:
+    """A loud, unmissable RESTART CODEX block for status - not just another line.
+
+    Recording only starts on the NEXT session, so a one-line note kept getting missed (Dror
+    17.09: closed and reopened three times, still read straight past "approved, but not run
+    yet"). ANSI is stripped on the Codex desktop and status prints inside a monospace block, so
+    the emphasis carries as caps + rule lines; ANSI bold is added only where it renders (TUI).
+    """
+    BLD, RST = _ansi("\033[1m"), _ansi("\033[0m")
+    rule = "=" * 66
+    out = ["", rule, f"  {BLD}>> ACTION NEEDED: RESTART CODEX <<{RST}", ""]
+    out += [f"  {line}" for line in reason_lines]
+    out += [rule, ""]
+    return out
+
+
 def cmd_status() -> int:
     """Everything support would ask for, in one pasteable block. Local reads only."""
     creds = credentials()
@@ -816,10 +847,10 @@ def cmd_status() -> int:
         lines.append(f"This directory: captured ({cwd})")
     lines.append("Pause state: " + (blocked if blocked else "not paused"))
     # The hook and this command do not always resolve plugin_dir() to the same place: Claude
-    # Code sets CLAUDE_PLUGIN_DATA, the desktop app may not. credentials() has always coped by
-    # also looking in ~/.kollate; the watermark did not, so status reported "0 sessions,
-    # delivery never" on a desktop that was capturing perfectly. Seen on the Windows bench
-    # 31.08 with the delivered conversation already sitting in the workspace. Read both.
+    # Code sets CLAUDE_PLUGIN_DATA, the desktop app may not. Both credentials() and the watermark
+    # now enumerate every data dir (credential_locations()/watermark_locations()); reading only
+    # ~/.kollate made status report "0 sessions, delivery never" on a desktop capturing perfectly
+    # (bench 31.08) and "Connected: NO" while capture worked (Dror 17.09). Read them all.
     seen, newest = {}, None
     for path in watermark_locations():
         seen.update(read_json(path, {}) or {})
@@ -844,15 +875,21 @@ def cmd_status() -> int:
         lines.append("Hooks last ran: "
                      + datetime.datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S"))
     elif host() == "codex" and codex_hooks_trusted():
-        # Approved, but hooks only fire when a session starts, so nothing has run yet. The old
-        # text sent people back to /hooks to redo what they had just done.
-        lines.append("Hooks: approved, but not run yet - they fire when a session STARTS. Quit "
-                     "Codex completely and open it again; this session cannot capture itself.")
+        # Approved, but hooks only fire when a session starts, so nothing has run yet. A single
+        # buried line kept getting missed (Dror 17.09: closed/reopened three times, still read
+        # past it), so make the restart a loud banner, not just another status line.
+        lines += restart_banner([
+            "Hooks are approved, but they only run when a NEW session starts -",
+            "this session cannot capture itself.",
+            "Quit Codex completely (tray icon -> Quit), then open it again.",
+        ])
     elif host() == "codex":
-        lines.append("Hooks: NEVER RUN - Codex will not run a hook until you trust it. When "
-                     "Codex starts it shows a \"Hooks need review\" prompt - choose \"Trust all "
-                     "and continue\" (or press t on the hooks table). Then quit Codex completely "
-                     "and open it again. Nothing is captured until you do.")
+        lines += restart_banner([
+            "Hooks are NOT trusted yet. When Codex starts it shows a",
+            "\"Hooks need review\" prompt - choose \"Trust all and continue\"",
+            "(or press t on the hooks table), then quit Codex completely and",
+            "open it again. Nothing is captured until you do.",
+        ])
     else:
         lines.append("Hooks: never run - restart your session; if it persists, reinstall.")
 
