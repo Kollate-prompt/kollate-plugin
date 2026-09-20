@@ -242,6 +242,8 @@ def credentials() -> dict:
         "endpoint": endpoint.rstrip("/"),
         # Deliveries go to Supabase, not to the frontend. Learned at connect time.
         "api_base": api or safe_api_base(endpoint),
+        # The Claude profile (org) that connected. Other profiles on this machine are not captured.
+        "claude_profile": stored.get("claude_profile") or {},
     }
 
 
@@ -598,6 +600,81 @@ def transcript_cwd(path: str) -> str:
     return ""
 
 
+def desktop_session_stores() -> list:
+    """The Claude desktop app's session stores, laid out <accountUuid>/<orgUuid>/local_*.json."""
+    if sys.platform == "darwin":
+        bases = [os.path.expanduser("~/Library/Application Support/Claude")]
+    elif os.name == "nt":
+        import glob
+        # The Store (MSIX) build is virtualised: its Roaming\Claude lives under the package's
+        # LocalCache, and %APPDATA%\Claude may not exist at all (seen on the bench, 20.09).
+        bases = [os.path.join(os.environ.get("APPDATA", ""), "Claude")] + glob.glob(os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "Packages", "Claude_*", "LocalCache", "Roaming", "Claude"))
+    else:
+        bases = [os.path.expanduser("~/.config/Claude")]
+    return [os.path.join(b, name) for b in bases for name in ("local-agent-mode-sessions", "claude-code-sessions")]
+
+
+def claude_profile(session_id: str) -> dict:
+    """Which Claude profile (account + org) is running, or {} when it cannot be told.
+
+    The desktop app spawns the CLI with the active profile's token in the environment and a
+    per-session CLAUDE_CONFIG_DIR that holds a COPY of ~/.claude.json - so oauthAccount there
+    names whoever logged in from a terminal, not the profile picked in the app. The only
+    place the app writes the real profile is its session store, where the directory names
+    are the account and org and the file carries the CLI session id. Look there first; fall
+    back to .claude.json for terminal sessions.
+    """
+    if session_id:
+        import glob
+        hits = []
+        for store in desktop_session_stores():
+            hits += glob.glob(os.path.join(store, "*", "*", "local_*.json"))
+        # Newest first: the session being captured is the one touched last.
+        def age(path):
+            try:
+                return -os.path.getmtime(path)
+            except OSError:
+                return 0
+        for path in sorted(hits, key=age):
+            if read_json(path, {}).get("cliSessionId") == session_id:
+                account_dir, org = os.path.split(os.path.dirname(path))
+                return {"org": org, "account": os.path.basename(account_dir), "source": "desktop"}
+    for directory in (os.environ.get("CLAUDE_CONFIG_DIR", ""), os.path.expanduser("~")):
+        if not directory:
+            continue
+        oauth = read_json(os.path.join(directory, ".claude.json"), {}).get("oauthAccount") or {}
+        if oauth.get("organizationUuid"):
+            return {"org": oauth["organizationUuid"], "account": oauth.get("accountUuid", ""),
+                    "email": oauth.get("emailAddress", ""), "name": oauth.get("organizationName", ""),
+                    "source": "claude.json"}
+    return {}
+
+
+def profile_label(profile: dict) -> str:
+    if not profile:
+        return "(unknown)"
+    who = profile.get("email") or f"account {profile.get('account', '?')[:8]}"
+    org = profile.get("name") or f"org {profile.get('org', '?')[:8]}"
+    return f"{who} / {org}"
+
+
+def other_profile(session_id: str) -> bool:
+    """True when this session runs under a different Claude profile than the one that connected.
+
+    Compared by org: the desktop app's profile switcher is an org switcher (one login, a
+    personal org and a company org). Unknown live profile = not blocked - a missing or
+    unreadable .claude.json must not silently stop capture for everyone.
+    """
+    if host() == "codex":
+        return False
+    stored = credentials().get("claude_profile") or {}
+    if not stored.get("org"):
+        return False
+    live = claude_profile(session_id)
+    return bool(live.get("org")) and live["org"] != stored["org"]
+
+
 def capture_blocked(session_id: str) -> str:
     """Why capture is off right now, or "" when it is on.
 
@@ -616,6 +693,8 @@ def capture_blocked(session_id: str) -> str:
                 return "capture is paused"
         except (TypeError, ValueError):
             pass
+    if other_profile(session_id):
+        return "a different Claude profile is signed in"
     return ""
 
 
@@ -846,6 +925,13 @@ def cmd_status() -> int:
     else:
         lines.append(f"This directory: captured ({cwd})")
     lines.append("Pause state: " + (blocked if blocked else "not paused"))
+    if host() != "codex":
+        stored, live = creds.get("claude_profile") or {}, claude_profile(this_session())
+        lines.append("Captured profile: " + (profile_label(stored) if stored else "any (connected before profiles were recorded)"))
+        if stored:
+            same = live.get("org") == stored.get("org") if live.get("org") else None
+            verdict = {True: "same - captured", False: "DIFFERENT - not captured", None: "unknown - captured"}[same]
+            lines.append(f"This session's profile: {profile_label(live)} ({verdict})")
     # The hook and this command do not always resolve plugin_dir() to the same place: Claude
     # Code sets CLAUDE_PLUGIN_DATA, the desktop app may not. Both credentials() and the watermark
     # now enumerate every data dir (credential_locations()/watermark_locations()); reading only
@@ -1058,6 +1144,9 @@ def cmd_doctor() -> int:
         lines.append(f"  (cannot list: {exc.strerror})")
     lines.append(f"this doctor runs from: {os.path.dirname(os.path.abspath(__file__))}")
 
+    lines.append(f"claude profile: live={claude_profile(this_session())} "
+                 f"stored={credentials().get('claude_profile') or {}} "
+                 f"CLAUDE_CONFIG_DIR={os.environ.get('CLAUDE_CONFIG_DIR', '-')}")
     lines.append(f"hook.log tail ({os.path.join(shared_dir(), 'hook.log')}):")
     try:
         tail = open(os.path.join(shared_dir(), "hook.log"), encoding="utf-8").read().splitlines()[-8:]
@@ -2255,6 +2344,11 @@ def connect() -> int:
             "endpoint": endpoint,
             "api_base": api_base,
         }
+        # Remember which Claude profile connected, so a personal profile on the same
+        # machine is left alone. Codex has one login per machine; nothing to remember.
+        profile = claude_profile(this_session()) if host() != "codex" else {}
+        if profile.get("org"):
+            credential["claude_profile"] = profile
         for target in {credentials_path(), os.path.join(shared_dir(), "credentials.json")}:
             write_json_private(target, credential)
         enrolled_at()
@@ -2262,6 +2356,9 @@ def connect() -> int:
         # tells us which tool it belongs to, so a Codex user is not told "Claude Code".
         tool = tool_name()
         message = KMARK + f"Connected. New {tool} conversations on this Desktop will be saved to Kollate."
+        if profile.get("org"):
+            message += (f" Connected as {profile_label(profile)} - conversations under any other "
+                        "Claude profile on this Desktop are not captured.")
         # The credential is now on disk, but a tool that is ALREADY running read its plugin
         # and credential at startup and will not pick this up until it restarts. This was the
         # exact miss: a user connected, saw "Connected", and nothing captured because nobody
