@@ -2110,28 +2110,33 @@ _DONE_PAGE = """<!doctype html>
 """
 
 _CONNECTED_EXTRA = """<ul>
-    <li>New conversations on this machine are saved to your workspace as they happen.</li>
+    <li>New conversations on this Desktop are saved to your workspace as they happen.</li>
     <li>Anything from before now is left alone - connecting does not reach backwards.</li>
     <li>Your workspace admins can read what is captured.</li>
-    <li>Disconnect this machine any time from Connect in Kollate.</li>
+    <li>Disconnect this Desktop any time from Connect in Kollate.</li>
   </ul>
   __BUTTON__
-  <p class="close">You can close this tab - Claude Code is finishing up.</p>"""
+  <p class="close">You can close this tab - __TOOL__ is finishing up.</p>"""
+
+def tool_name() -> str:
+    """The display name of the tool this connect ran from, for wording the done page."""
+    return "Codex" if host() == "codex" else "Claude Code"
 
 def done_page(ok: bool, endpoint: str = "") -> str:
     """The loopback listener's only response. `ok` is false when nothing usable came back."""
+    tool = tool_name()
     if ok:
-        title, heading = "Connected", "This machine is connected."
-        body = "Go back to your workspace - from here on, your Claude Code conversations are preserved in Kollate."
+        title, heading = "Connected", "This Desktop is connected."
+        body = f"Go back to your workspace - from here on, your {tool} conversations are preserved in Kollate."
         button = ""
         # Only offer the link if the address is one we would trust anywhere else.
         if safe_api_base(endpoint):
             target = html.escape(endpoint.rstrip("/") + "/app/conversations", quote=True)
             button = f'<a class="go" href="{target}">Open your workspace</a>'
-        extra = _CONNECTED_EXTRA.replace("__BUTTON__", button)
+        extra = _CONNECTED_EXTRA.replace("__BUTTON__", button).replace("__TOOL__", tool)
     else:
         title, heading = "Not connected", "That did not complete."
-        body = "Nothing was changed, and this machine is not connected."
+        body = "Nothing was changed, and this Desktop is not connected."
         extra = f'<p class="closef">Close this tab and run {command("connect")} again.</p>'
 
     return (
@@ -2255,8 +2260,8 @@ def connect() -> int:
         enrolled_at()
         # Surface-accurate: connect usually runs in a terminal, but the plugin's own path
         # tells us which tool it belongs to, so a Codex user is not told "Claude Code".
-        tool = "Codex" if host() == "codex" else "Claude Code"
-        message = KMARK + f"Connected. New {tool} conversations on this machine will be saved to Kollate."
+        tool = tool_name()
+        message = KMARK + f"Connected. New {tool} conversations on this Desktop will be saved to Kollate."
         # The credential is now on disk, but a tool that is ALREADY running read its plugin
         # and credential at startup and will not pick this up until it restarts. This was the
         # exact miss: a user connected, saw "Connected", and nothing captured because nobody
@@ -2271,7 +2276,7 @@ def connect() -> int:
                         "pick this up until you do.")
         blocked = capture_blocked("")
         if blocked:
-            message += (f" WARNING: {blocked} on this machine, so nothing is captured yet - "
+            message += (f" WARNING: {blocked} on this Desktop, so nothing is captured yet - "
                         f"run {command('resume')} to actually start.")
         return True, message + install_statusline()
 
