@@ -1408,7 +1408,25 @@ def _as_turn(record: dict) -> dict:
     }
 
 
-def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | None, bool]:
+def _give_usage(turn: dict, tokens: dict | None, model: str | None) -> None:
+    """Add `tokens` to a turn's usage, naming the model last seen."""
+    usage = _merge_usage(turn.get("usage"), tokens)
+    if usage:
+        turn["usage"] = {**usage, "model": model} if model else usage
+
+
+def _settle(turns: list[dict], tokens: dict, end: int, cursor: str | None, model: str | None) -> None:
+    """Usage on a record that did not become a turn belongs to the answer before it, if the
+    last stored turn is one. That answer now ends after the record, so the watermark never
+    re-reads usage that was already sent. Otherwise the caller holds it for the next turn."""
+    if turns and turns[-1]["role"] == "assistant":
+        _give_usage(turns[-1], tokens, model)
+        turns[-1]["_offset"] = end
+        turns[-1]["_cursor"] = cursor
+
+
+def turns_from(path: str, start_offset: int,
+               usage_cursor: str | None = None) -> tuple[list[dict], int, str | None, bool]:
     """Read the transcript from `start_offset`: whole turns, the new offset, and a name.
 
     The offset only ever advances to the end of the last COMPLETE line: Claude Code may be
@@ -1419,11 +1437,21 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
     so we take the last one in the range and let a later delivery correct it. Reading only the
     delta is deliberate: a transcript can be hundreds of megabytes and re-scanning it every
     turn to find a title we already sent would cost far more than the title is worth.
+
+    Assistant turns also carry the model usage behind them (usage_of): their own response,
+    plus any tool-only calls and Codex token counts that follow before the next stored turn.
+    `usage_cursor` is the mark's memory of the last call counted, so a resumed read never
+    counts a response the previous delivery already sent.
     """
     turns: list[dict] = []
     title: str | None = None
     title_chosen = False
     consumed = start_offset
+    cursor = usage_cursor
+    model: str | None = None
+    held: dict | None = None     # usage waiting for the next stored turn
+    carry: dict | None = None    # usage on the record just read, until we know if it is a turn
+    carry_end = start_offset
     try:
         with open(path, "rb") as handle:
             handle.seek(start_offset)
@@ -1432,6 +1460,11 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
         return [], start_offset, None, False
 
     for raw in data.splitlines(keepends=True):
+        if carry is not None:
+            _settle(turns, carry, carry_end, cursor, model)
+            if not (turns and turns[-1]["role"] == "assistant"):
+                held = _merge_usage(held, carry)
+            carry = None
         if not raw.endswith(b"\n"):
             # The last line is still being written. Leave it for the next delivery - half a
             # JSON object is not a turn, and re-reading it costs nothing.
@@ -1447,6 +1480,11 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
             # A complete but unparseable line. Skip it and keep going: refusing to advance
             # would stall this session's capture permanently, and silently, on one bad line.
             continue
+
+        tokens, seen_model, cursor = usage_of(record, cursor)
+        model = seen_model or model
+        if tokens:
+            carry, carry_end = tokens, consumed
 
         record = _as_turn(record)
 
@@ -1471,17 +1509,25 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
         text = _flatten(message.get("content"))
         if not text:
             continue  # a turn that was only a tool call has nothing readable to store
-        turns.append(
-            {
-                "role": message.get("role") or record.get("type"),
-                "content": text,
-                "uuid": record.get("uuid"),
-                "sent_at": record.get("timestamp"),
-                # Where this turn ends in the file. The watermark may only ever move to a
-                # point that was actually confirmed, so each turn carries its own.
-                "_offset": consumed,
-            }
-        )
+        turn = {
+            "role": message.get("role") or record.get("type"),
+            "content": text,
+            "uuid": record.get("uuid"),
+            "sent_at": record.get("timestamp"),
+            # Where this turn ends in the file. The watermark may only ever move to a
+            # point that was actually confirmed, so each turn carries its own.
+            "_offset": consumed,
+            "_cursor": cursor,
+        }
+        if turn["role"] == "assistant":
+            _give_usage(turn, _merge_usage(held, carry), model)
+            held = carry = None
+        elif carry is not None:
+            held, carry = _merge_usage(held, carry), None  # a person's turn carries no usage
+        turns.append(turn)
+
+    if carry is not None:
+        _settle(turns, carry, carry_end, cursor, model)
 
     # Older transcripts predate `ai-title` entirely. Rather than leave those permanently
     # "Untitled", name them from the opening question - which is what a person would have
@@ -1500,26 +1546,28 @@ def turns_from(path: str, start_offset: int) -> tuple[list[dict], int, str | Non
 def batches(turns: list[dict], first_seq: int):
     """Number the turns and split them so no single delivery approaches the size ceiling.
 
-    Yields (messages, offset_after_this_batch) so the caller can advance the watermark to
-    exactly what was confirmed, and not one byte further.
+    Yields (messages, offset_after_this_batch, usage_cursor_after_this_batch) so the caller can
+    advance the watermark to exactly what was confirmed, and not one byte further.
     """
     batch: list[dict] = []
     size = 0
     seq = first_seq
     end = 0
+    cursor = None
     for turn in turns:
-        numbered = {k: v for k, v in turn.items() if k != "_offset"}
+        numbered = {k: v for k, v in turn.items() if not k.startswith("_")}
         numbered["seq"] = seq
         seq += 1
         encoded = len(json.dumps(numbered))
         if batch and size + encoded > MAX_DELIVERY_BYTES:
-            yield batch, end
+            yield batch, end, cursor
             batch, size = [], 0
         batch.append(numbered)
         size += encoded
         end = turn["_offset"]
+        cursor = turn.get("_cursor")
     if batch:
-        yield batch, end
+        yield batch, end, cursor
 
 
 # ------------------------------------------------------------------------------- delivery
@@ -1582,7 +1630,7 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
             pass
 
 
-def advance_watermark(key: str, offset: int, next_seq: int) -> None:
+def advance_watermark(key: str, offset: int, next_seq: int, usage_cursor: str | None = None) -> None:
     """Move the mark forward, never backward, under a lock.
 
     Two hooks can be in flight at once - a slow delivery and the next turn's fast one. Without
@@ -1622,6 +1670,8 @@ def advance_watermark(key: str, offset: int, next_seq: int) -> None:
         if offset <= int(current.get("offset", 0)):
             return  # somebody else already got further; leave their mark alone
         marks[key] = {"offset": offset, "next_seq": next_seq}
+        if usage_cursor:
+            marks[key]["usage_cursor"] = usage_cursor
         write_json_private(path, marks)
     finally:
         _unlock(lock_fd)
@@ -1684,7 +1734,8 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     source = source_of(transcript)
     key = watermark_key(session_id, source)
     mark = read_json(watermark_path(), {}).get(key) or {"offset": 0, "next_seq": 0}
-    turns, _end, title, title_chosen = turns_from(transcript, int(mark.get("offset", 0)))
+    turns, _end, title, title_chosen = turns_from(
+        transcript, int(mark.get("offset", 0)), mark.get("usage_cursor"))
     if not turns:
         return
 
@@ -1701,11 +1752,11 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         blocked = "directory opted out"
     if blocked:
         # Advance the watermark over the delta without sending it, so it is gone for good.
-        advance_watermark(key, _end, int(mark.get("next_seq", 0)))
+        advance_watermark(key, _end, int(mark.get("next_seq", 0)), turns[-1].get("_cursor"))
         return
 
     seq = int(mark.get("next_seq", 0))
-    for batch, batch_end in batches(turns, seq):
+    for batch, batch_end, batch_cursor in batches(turns, seq):
         # The name rides along with the first batch only. Sending it with every batch would
         # be the same value written repeatedly for no gain.
         if not deliver(session_id, batch, creds, title, title_chosen, source):
@@ -1716,7 +1767,7 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
         seq = batch[-1]["seq"] + 1
         # Only as far as THIS batch reached. Advancing to the end of the whole delta here
         # would skip the turns in a batch that has not been sent yet.
-        advance_watermark(key, batch_end, seq)
+        advance_watermark(key, batch_end, seq, batch_cursor)
 
 
 CODEX_SESSIONS_ROOT = "~/.codex/sessions"

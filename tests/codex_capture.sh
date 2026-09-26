@@ -69,6 +69,26 @@ check("turn_context names the model",
       kollate.usage_of({"type": "turn_context", "payload": {"model": "gpt-x"}}, cursor),
       (None, "gpt-x", cursor))
 
+print("usage, across a transcript")
+CODEX_LOOP = [
+    {"type": "turn_context", "payload": {"model": "gpt-x"}},
+    json.loads(record("user", "fix the test", 1)),
+    token_count(500, 400, 300, 20),     # a tool call's model turn, before any answer
+    json.loads(record("assistant", "Fixed.", 2, "output_text")),
+    token_count(1100, 550, 500, 50),    # the answer's own usage, written just after it
+    token_count(1100, 550, 500, 50),    # Codex repeating itself
+]
+cl_path = os.path.join(tempfile.mkdtemp(), "loop.jsonl")  # outside the scanned tree
+with open(cl_path, "w") as handle:
+    handle.write("\n".join(json.dumps(r) for r in CODEX_LOOP) + "\n")
+ct, _, _, _ = kollate.turns_from(cl_path, 0)
+check("two stored turns", [t["role"] for t in ct], ["user", "assistant"])
+check("a person's turn carries no usage", "usage" in ct[0], False)
+check("the answer carries the calls before it and its own, each once", ct[1]["usage"],
+      {"input_tokens": 150, "output_tokens": 70, "cache_read_tokens": 800,
+       "cache_write_tokens": 0, "api_calls": 2, "model": "gpt-x"})
+check("the answer ends after the usage it absorbed", ct[1]["_offset"] > 0, True)
+
 print("parser")
 turns, end, title, chosen = kollate.turns_from(transcript, 0)
 check("only the person's turns survive", [t["role"] for t in turns], ["user", "assistant"])

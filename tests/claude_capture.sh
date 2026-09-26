@@ -103,6 +103,51 @@ check("merge sums counts", kollate._merge_usage(tokens, tokens)["cache_read_toke
 check("merge sums calls", kollate._merge_usage(tokens, tokens)["api_calls"], 2)
 check("merge of nothing is nothing", kollate._merge_usage(None, None), None)
 
+print("usage, across a transcript")
+def u(inp, out, read=0, write=0):
+    return {"input_tokens": inp, "output_tokens": out, "cache_read_input_tokens": read,
+            "cache_creation_input_tokens": write}
+LOOP = [
+    {"type": "user", "uuid": "q1", "message": {"role": "user", "content": "fix the test"}},
+    # One response, three block records, identical usage on each: counted once.
+    assistant("r1", u(10, 5, 100), [{"type": "thinking", "thinking": "..."}]),
+    assistant("r1", u(10, 5, 100), [{"type": "text", "text": "Looking."}]),
+    assistant("r1", u(10, 5, 100), [{"type": "tool_use", "name": "Read", "input": {}}]),
+    {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
+    # A tool-only response: never a stored turn, but its usage belongs to "Looking."
+    assistant("r2", u(3, 7, 200), [{"type": "tool_use", "name": "Edit", "input": {}}]),
+    {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
+    assistant("r3", u(1, 9, 300, 40), [{"type": "text", "text": "Fixed."}]),
+]
+loop_path = os.path.join(tempfile.mkdtemp(), "loop.jsonl")  # outside the scanned tree
+with open(loop_path, "w") as handle:
+    handle.write("\n".join(json.dumps(r) for r in LOOP) + "\n")
+lt, lend, _, _ = kollate.turns_from(loop_path, 0)
+check("three stored turns", [t["content"] for t in lt], ["fix the test", "Looking.", "Fixed."])
+check("a person's turn has no usage", "usage" in lt[0], False)
+check("a turn carries its own response and the tool calls after it", lt[1]["usage"],
+      {"input_tokens": 13, "output_tokens": 12, "cache_read_tokens": 300,
+       "cache_write_tokens": 0, "api_calls": 2, "model": "claude-opus-5-5"})
+check("the last turn carries only its own", lt[2]["usage"]["api_calls"], 1)
+check("and its cache writes", lt[2]["usage"]["cache_write_tokens"], 40)
+check("absorbed usage moves the turn's end past it", lt[1]["_offset"] > lt[0]["_offset"], True)
+
+# Resume from after "Looking." with its cursor: the tail must not count r1 again.
+tail, _, _, _ = kollate.turns_from(loop_path, lt[1]["_offset"], lt[1]["_cursor"])
+check("a resumed read counts nothing twice", [t["usage"]["api_calls"] for t in tail], [1])
+
+print("the cursor rides with the batch and the mark")
+out = list(kollate.batches(lt, 0))
+check("batches yield the cursor", out[-1][2], lt[-1]["_cursor"])
+check("underscore keys never leave the machine",
+      [k for m in out[-1][0] for k in m if k.startswith("_")], [])
+os.environ["CLAUDE_PLUGIN_DATA"] = tempfile.mkdtemp()
+kollate.advance_watermark("cursor-check", 10, 1, "r3")
+check("the mark keeps the cursor",
+      kollate.read_json(kollate.watermark_path(), {})["cursor-check"],
+      {"offset": 10, "next_seq": 1, "usage_cursor": "r3"})
+del os.environ["CLAUDE_PLUGIN_DATA"]
+
 print("discovery")
 CODE = ("import sys; sys.path.insert(0,'plugins/kollate/hooks'); import kollate, json; "
         "print(json.dumps([(s, src) for _p, s, src in kollate.session_files()]))")
