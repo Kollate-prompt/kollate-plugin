@@ -136,6 +136,39 @@ check("absorbed usage moves the turn's end past it", lt[1]["_offset"] > lt[0]["_
 tail, _, _, _ = kollate.turns_from(loop_path, lt[1]["_offset"], lt[1]["_cursor"])
 check("a resumed read counts nothing twice", [t["usage"]["api_calls"] for t in tail], [1])
 
+# A response interrupted before any assistant text: its usage must land on the interrupt
+# turn itself, not ride forward past it - otherwise the watermark could pass this turn's
+# offset with that usage never sent.
+INTERRUPT = [
+    {"type": "user", "uuid": "q1", "message": {"role": "user", "content": "run the tests"}},
+    assistant("r1", u(4, 2, 50), [{"type": "tool_use", "name": "Bash", "input": {}}]),
+    {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
+    {"type": "user", "uuid": "i1",
+     "message": {"role": "user", "content": "[Request interrupted by user for tool use]"}},
+    {"type": "user", "uuid": "q2", "message": {"role": "user", "content": "never mind, try again"}},
+    assistant("r2", u(6, 3, 70), [{"type": "text", "text": "Retrying."}]),
+]
+interrupt_path = os.path.join(tempfile.mkdtemp(), "interrupt.jsonl")
+with open(interrupt_path, "w") as handle:
+    handle.write("\n".join(json.dumps(r) for r in INTERRUPT) + "\n")
+it, _, _, _ = kollate.turns_from(interrupt_path, 0)
+check("q1, the interrupt, q2 and the retry are the four stored turns",
+      [t["content"] for t in it],
+      ["run the tests", "[Request interrupted by user for tool use]", "never mind, try again",
+       "Retrying."])
+check("the interrupted turn takes the tool call's usage", it[1]["usage"]["api_calls"], 1)
+check("the retry carries its own usage", it[3]["usage"]["api_calls"], 1)
+r1_end = len(("\n".join(json.dumps(r) for r in INTERRUPT[:2]) + "\n").encode())
+check("the interrupted turn's offset moved past the tool call it absorbed",
+      it[1]["_offset"] > r1_end, True)
+
+# Resume from the interrupt turn: only the retry's usage should still be out there.
+tail2, _, _, _ = kollate.turns_from(interrupt_path, it[1]["_offset"], it[1]["_cursor"])
+tail2_calls = sum(t.get("usage", {}).get("api_calls", 0) for t in tail2)
+check("a resumed read counts only the retry", tail2_calls, 1)
+check("both calls are accounted for across the two reads",
+      it[1]["usage"]["api_calls"] + tail2_calls, 2)
+
 print("the cursor rides with the batch and the mark")
 out = list(kollate.batches(lt, 0))
 check("batches yield the cursor", out[-1][2], lt[-1]["_cursor"])

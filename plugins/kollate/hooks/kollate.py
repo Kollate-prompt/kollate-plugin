@@ -1438,10 +1438,15 @@ def turns_from(path: str, start_offset: int,
     delta is deliberate: a transcript can be hundreds of megabytes and re-scanning it every
     turn to find a title we already sent would cost far more than the title is worth.
 
-    Assistant turns also carry the model usage behind them (usage_of): their own response,
-    plus any tool-only calls and Codex token counts that follow before the next stored turn.
-    `usage_cursor` is the mark's memory of the last call counted, so a resumed read never
-    counts a response the previous delivery already sent.
+    Every stored turn also carries the model usage behind it (usage_of): its own response, if
+    it has one, plus any tool-only calls and Codex token counts that came before it and after
+    the previous stored turn. That means a user turn is usually left alone, but takes the usage
+    when a response was interrupted before any assistant text - the alternative, letting it
+    ride forward, would let the watermark pass that turn's offset and lose it for good. A
+    tool-only call written after an answer has already been delivered is instead counted on
+    the NEXT answer, so totals stay exact even though which answer a given call lands on, at a
+    delivery boundary, is approximate. `usage_cursor` is the mark's memory of the last call
+    counted, so a resumed read never counts a response the previous delivery already sent.
     """
     turns: list[dict] = []
     title: str | None = None
@@ -1485,6 +1490,12 @@ def turns_from(path: str, start_offset: int,
         model = seen_model or model
         if tokens:
             carry, carry_end = tokens, consumed
+        elif (record.get("type") == "event_msg"
+              and (record.get("payload") or {}).get("type") == "token_count"):
+            # Codex sometimes repeats a token_count verbatim - nothing new to add, but it is
+            # fully read and safe to fold into whichever turn absorbs the usage around it, so
+            # the mark does not stall one line short of what was actually seen.
+            carry, carry_end = {}, consumed
 
         record = _as_turn(record)
 
@@ -1519,11 +1530,12 @@ def turns_from(path: str, start_offset: int,
             "_offset": consumed,
             "_cursor": cursor,
         }
-        if turn["role"] == "assistant":
-            _give_usage(turn, _merge_usage(held, carry), model)
-            held = carry = None
-        elif carry is not None:
-            held, carry = _merge_usage(held, carry), None  # a person's turn carries no usage
+        # Whatever is held or carried belongs to THIS turn now, whichever role it is. Letting
+        # a user turn carry it forward instead would let the watermark pass this turn's offset
+        # and lose usage that was never sent - a user turn only takes it when a response was
+        # interrupted before any assistant text, which is rare but real.
+        _give_usage(turn, _merge_usage(held, carry), model)
+        held = carry = None
         turns.append(turn)
 
     if carry is not None:

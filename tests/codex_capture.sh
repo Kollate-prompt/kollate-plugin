@@ -87,7 +87,10 @@ check("a person's turn carries no usage", "usage" in ct[0], False)
 check("the answer carries the calls before it and its own, each once", ct[1]["usage"],
       {"input_tokens": 150, "output_tokens": 70, "cache_read_tokens": 800,
        "cache_write_tokens": 0, "api_calls": 2, "model": "gpt-x"})
-check("the answer ends after the usage it absorbed", ct[1]["_offset"] > 0, True)
+check("the answer ends past everything it absorbed, at the end of the file",
+      ct[1]["_offset"], os.path.getsize(cl_path))
+resumed, _, _, _ = kollate.turns_from(cl_path, ct[1]["_offset"], ct[1]["_cursor"])
+check("a resumed read finds nothing - the absorbed token_counts are not re-read", resumed, [])
 
 print("parser")
 turns, end, title, chosen = kollate.turns_from(transcript, 0)
