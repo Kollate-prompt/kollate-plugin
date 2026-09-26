@@ -48,6 +48,27 @@ transcript = os.path.join(
 with open(transcript, "w") as handle:
     handle.write(FIXTURE)
 
+print("usage, one record at a time")
+def token_count(total, last_input, last_cached, last_output):
+    return {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"total_tokens": total},
+        "last_token_usage": {"input_tokens": last_input, "cached_input_tokens": last_cached,
+                             "cache_write_input_tokens": 0, "output_tokens": last_output,
+                             "reasoning_output_tokens": 5, "total_tokens": last_input + last_output}}}}
+tokens, model, cursor = kollate.usage_of(token_count(1000, 900, 600, 100), None)
+check("codex input is reported uncached", tokens,
+      {"input_tokens": 300, "output_tokens": 100, "cache_read_tokens": 600,
+       "cache_write_tokens": 0, "api_calls": 1})
+check("codex cursor is the running total", cursor, "codex:1000")
+check("a repeated token_count is not counted twice",
+      kollate.usage_of(token_count(1000, 900, 600, 100), cursor)[0], None)
+check("a token_count with no info is ignored",
+      kollate.usage_of({"type": "event_msg", "payload": {"type": "token_count", "info": None}}, cursor),
+      (None, None, cursor))
+check("turn_context names the model",
+      kollate.usage_of({"type": "turn_context", "payload": {"model": "gpt-x"}}, cursor),
+      (None, "gpt-x", cursor))
+
 print("parser")
 turns, end, title, chosen = kollate.turns_from(transcript, 0)
 check("only the person's turns survive", [t["role"] for t in turns], ["user", "assistant"])

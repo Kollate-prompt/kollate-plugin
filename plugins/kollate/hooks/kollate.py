@@ -1237,6 +1237,78 @@ def enrolled_at() -> float:
     return now
 
 
+# ----------------------------------------------------------------------------------- usage
+
+
+# The same meaning for both tools. input_tokens is UNCACHED input: Claude reports it that way,
+# while Codex (OpenAI) folds the cached part into input_tokens, so it is subtracted back out.
+USAGE_COUNTS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+                "api_calls")
+
+
+def _count(value) -> int:
+    """A token count as the tools write it. Anything that is not a non-negative int is 0."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _merge_usage(a: dict | None, b: dict | None) -> dict | None:
+    """Sum two usage totals. `model` is not a count and is set by the caller, not here."""
+    if not a and not b:
+        return None
+    return {key: _count((a or {}).get(key)) + _count((b or {}).get(key)) for key in USAGE_COUNTS}
+
+
+def usage_of(record: dict, cursor: str | None) -> tuple[dict | None, str | None, str | None]:
+    """The NEW model usage one raw transcript record carries: (tokens, model, cursor).
+
+    Reads the record as the tool wrote it, before _as_turn, because usage lives on records we
+    otherwise throw away - Codex's token_count events, and Claude Code's tool-only responses.
+
+    `cursor` is what makes each call count exactly once, even across deliveries. Claude Code
+    writes one record per content block and repeats the whole response's usage on every one,
+    so a response counts the first time its id is seen. Codex sometimes emits the same
+    token_count twice, so an event counts only when its running total has moved.
+    """
+    kind = record.get("type")
+    if kind == "assistant":
+        message = record.get("message") or {}
+        model = message.get("model")
+        if model == "<synthetic>":
+            return None, None, cursor  # Claude Code's own filler, not a model call
+        usage = message.get("usage")
+        response_id = message.get("id")
+        if not isinstance(usage, dict) or not response_id or response_id == cursor:
+            return None, model if isinstance(model, str) else None, cursor
+        return ({"input_tokens": _count(usage.get("input_tokens")),
+                 "output_tokens": _count(usage.get("output_tokens")),
+                 "cache_read_tokens": _count(usage.get("cache_read_input_tokens")),
+                 "cache_write_tokens": _count(usage.get("cache_creation_input_tokens")),
+                 "api_calls": 1},
+                model if isinstance(model, str) else None, response_id)
+
+    payload = record.get("payload") or {}
+    if kind == "turn_context":
+        model = payload.get("model")
+        return None, model if isinstance(model, str) and model else None, cursor
+    if kind == "event_msg" and payload.get("type") == "token_count":
+        info = payload.get("info")
+        if not isinstance(info, dict):
+            return None, None, cursor
+        total = _count((info.get("total_token_usage") or {}).get("total_tokens"))
+        marker = f"codex:{total}"
+        last = info.get("last_token_usage")
+        if marker == cursor or not isinstance(last, dict):
+            return None, None, cursor
+        cached = _count(last.get("cached_input_tokens"))
+        return ({"input_tokens": max(_count(last.get("input_tokens")) - cached, 0),
+                 "output_tokens": _count(last.get("output_tokens")),
+                 "cache_read_tokens": cached,
+                 "cache_write_tokens": _count(last.get("cache_write_input_tokens")),
+                 "api_calls": 1},
+                None, marker)
+    return None, None, cursor
+
+
 # ----------------------------------------------------------------------------- compaction
 
 

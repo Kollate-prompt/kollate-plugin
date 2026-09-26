@@ -76,6 +76,33 @@ check("Claude Code's marks keep their bare key",
 check("a Claude Code transcript is not mistaken for a Codex one",
       kollate.source_of(transcript), "claude_code")
 
+print("usage, one record at a time")
+def assistant(msg_id, usage, blocks, model="claude-opus-5-5"):
+    return {"type": "assistant", "message": {"id": msg_id, "model": model, "role": "assistant",
+            "usage": usage, "content": blocks}}
+U = {"input_tokens": 2, "cache_creation_input_tokens": 500, "cache_read_input_tokens": 9000,
+     "output_tokens": 80, "output_tokens_details": {"thinking_tokens": 10}}
+tokens, model, cursor = kollate.usage_of(assistant("m1", U, [{"type": "text", "text": "x"}]), None)
+check("claude usage normalised", tokens,
+      {"input_tokens": 2, "output_tokens": 80, "cache_read_tokens": 9000,
+       "cache_write_tokens": 500, "api_calls": 1})
+check("claude model read", model, "claude-opus-5-5")
+check("claude cursor is the response id", cursor, "m1")
+again = kollate.usage_of(assistant("m1", U, [{"type": "tool_use", "name": "Bash", "input": {}}]), cursor)
+check("a second block of the same response is not counted twice", again[0], None)
+check("and the cursor stays put", again[2], "m1")
+synthetic = kollate.usage_of(assistant("m2", {"input_tokens": 0, "output_tokens": 0},
+                                       [{"type": "text", "text": "No response requested."}],
+                                       model="<synthetic>"), "m1")
+check("Claude Code's synthetic messages carry no usage", synthetic[0], None)
+check("and are not a model", synthetic[1], None)
+check("a user record carries no usage",
+      kollate.usage_of({"type": "user", "message": {"role": "user", "content": "hi"}}, None),
+      (None, None, None))
+check("merge sums counts", kollate._merge_usage(tokens, tokens)["cache_read_tokens"], 18000)
+check("merge sums calls", kollate._merge_usage(tokens, tokens)["api_calls"], 2)
+check("merge of nothing is nothing", kollate._merge_usage(None, None), None)
+
 print("discovery")
 CODE = ("import sys; sys.path.insert(0,'plugins/kollate/hooks'); import kollate, json; "
         "print(json.dumps([(s, src) for _p, s, src in kollate.session_files()]))")
