@@ -171,6 +171,55 @@ check("a resumed read counts only the retry", tail2_calls, 1)
 check("both calls are accounted for across the two reads",
       it[1]["usage"]["api_calls"] + tail2_calls, 2)
 
+# A response whose first content block is NOT its text: the carry from that first block must
+# stay pending through the response's own later blocks, not settle onto the previous answer.
+SAMEID = [
+    {"type": "user", "uuid": "q1", "message": {"role": "user", "content": "first question"}},
+    assistant("ra", u(1, 10), [{"type": "text", "text": "A"}]),
+    {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
+    assistant("rb", u(2, 99), [{"type": "thinking", "thinking": "..."}]),
+    assistant("rb", u(2, 99), [{"type": "text", "text": "B"}]),
+]
+sameid_path = os.path.join(tempfile.mkdtemp(), "sameid.jsonl")
+with open(sameid_path, "w") as handle:
+    handle.write("\n".join(json.dumps(r) for r in SAMEID) + "\n")
+at, _, _, _ = kollate.turns_from(sameid_path, 0)
+check("A and B are the two stored answers",
+      [t["content"] for t in at if t["role"] == "assistant"], ["A", "B"])
+a_turn = next(t for t in at if t["content"] == "A")
+b_turn = next(t for t in at if t["content"] == "B")
+check("A keeps only its own usage, not rb's leading thinking block",
+      a_turn["usage"]["output_tokens"], 10)
+check("A's call count", a_turn["usage"]["api_calls"], 1)
+check("B gets its own response's usage even though thinking came before its text",
+      b_turn["usage"]["output_tokens"], 99)
+check("B's call count", b_turn["usage"]["api_calls"], 1)
+
+# Resumed from A: rb's usage must still be out there exactly once, not lost and not doubled.
+tail3, _, _, _ = kollate.turns_from(sameid_path, a_turn["_offset"], a_turn["_cursor"])
+tail3_calls = sum(t.get("usage", {}).get("api_calls", 0) for t in tail3)
+check("a resumed read from A counts rb exactly once", tail3_calls, 1)
+
+# A tool-only response (never becomes a turn) whose first block is also not its only block:
+# it must still land on the answer before it, same as the existing tool-only rule.
+TOOLONLY = [
+    {"type": "user", "uuid": "q1", "message": {"role": "user", "content": "question"}},
+    assistant("ta", u(1, 10), [{"type": "text", "text": "Answer"}]),
+    {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
+    assistant("tb", u(3, 20), [{"type": "thinking", "thinking": "..."}]),
+    assistant("tb", u(3, 20), [{"type": "tool_use", "name": "Bash", "input": {}}]),
+]
+toolonly_path = os.path.join(tempfile.mkdtemp(), "toolonly.jsonl")
+with open(toolonly_path, "w") as handle:
+    handle.write("\n".join(json.dumps(r) for r in TOOLONLY) + "\n")
+ct, _, _, _ = kollate.turns_from(toolonly_path, 0)
+check("only the answer is stored - the tool-only response never becomes a turn",
+      [t["content"] for t in ct], ["question", "Answer"])
+check("the tool-only response's usage still lands on the answer before it",
+      ct[1]["usage"],
+      {"input_tokens": 4, "output_tokens": 30, "cache_read_tokens": 0,
+       "cache_write_tokens": 0, "api_calls": 2, "model": "claude-opus-5-5"})
+
 print("the cursor rides with the batch and the mark")
 out = list(kollate.batches(lt, 0))
 check("batches yield the cursor", out[-1][2], lt[-1]["_cursor"])

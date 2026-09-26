@@ -1443,10 +1443,18 @@ def turns_from(path: str, start_offset: int,
     the previous stored turn. That means a user turn is usually left alone, but takes the usage
     when a response was interrupted before any assistant text - the alternative, letting it
     ride forward, would let the watermark pass that turn's offset and lose it for good. A
-    tool-only call written after an answer has already been delivered is instead counted on
-    the NEXT answer, so totals stay exact even though which answer a given call lands on, at a
-    delivery boundary, is approximate. `usage_cursor` is the mark's memory of the last call
-    counted, so a resumed read never counts a response the previous delivery already sent.
+    tool-only call written after an answer has already been delivered, or before a user message
+    that arrived mid-response, is instead counted on the next stored turn of EITHER role, so
+    totals stay exact even though which turn a given call lands on, at a delivery boundary, is
+    approximate. `usage_cursor` is the mark's memory of the last call counted, so a resumed read
+    never counts a response the previous delivery already sent.
+
+    A response's usage is repeated on every content block Claude Code writes for it (usage_of's
+    cursor dedup keeps only the first). When the first block is not the response's text - e.g.
+    thinking before the answer, or a tool call before a later text block of the SAME response -
+    the usage stays pending rather than settling onto the previous answer: it settles through
+    the ordinary turn path if a later same-id block has text, or onto the previous assistant
+    turn (or is held) only once a record from a DIFFERENT response arrives.
     """
     turns: list[dict] = []
     title: str | None = None
@@ -1457,6 +1465,7 @@ def turns_from(path: str, start_offset: int,
     held: dict | None = None     # usage waiting for the next stored turn
     carry: dict | None = None    # usage on the record just read, until we know if it is a turn
     carry_end = start_offset
+    carry_id: str | None = None  # the Claude message.id the carry came from; None for Codex
     try:
         with open(path, "rb") as handle:
             handle.seek(start_offset)
@@ -1465,14 +1474,10 @@ def turns_from(path: str, start_offset: int,
         return [], start_offset, None, False
 
     for raw in data.splitlines(keepends=True):
-        if carry is not None:
-            _settle(turns, carry, carry_end, cursor, model)
-            if not (turns and turns[-1]["role"] == "assistant"):
-                held = _merge_usage(held, carry)
-            carry = None
         if not raw.endswith(b"\n"):
             # The last line is still being written. Leave it for the next delivery - half a
-            # JSON object is not a turn, and re-reading it costs nothing.
+            # JSON object is not a turn, and re-reading it costs nothing. Any pending carry
+            # stays pending until a complete line settles it.
             break
         line_length = len(raw)
         if not raw.strip():
@@ -1484,18 +1489,34 @@ def turns_from(path: str, start_offset: int,
         except Exception:
             # A complete but unparseable line. Skip it and keep going: refusing to advance
             # would stall this session's capture permanently, and silently, on one bad line.
+            # A pending carry stays pending across it.
             continue
+
+        # Settle the previous carry now that we know what follows it - unless this record is a
+        # further content block of the SAME response that produced it, in which case the usage
+        # stays pending: it is still that response's, and may yet land on its own text block.
+        same_response = (carry_id is not None and record.get("type") == "assistant"
+                          and (record.get("message") or {}).get("id") == carry_id)
+        if carry is not None and not same_response:
+            _settle(turns, carry, carry_end, cursor, model)
+            if not (turns and turns[-1]["role"] == "assistant"):
+                held = _merge_usage(held, carry)
+            carry = None
+            carry_id = None
 
         tokens, seen_model, cursor = usage_of(record, cursor)
         model = seen_model or model
         if tokens:
             carry, carry_end = tokens, consumed
+            carry_id = (record.get("message") or {}).get("id") \
+                if record.get("type") == "assistant" else None
         elif (record.get("type") == "event_msg"
               and (record.get("payload") or {}).get("type") == "token_count"):
             # Codex sometimes repeats a token_count verbatim - nothing new to add, but it is
             # fully read and safe to fold into whichever turn absorbs the usage around it, so
             # the mark does not stall one line short of what was actually seen.
             carry, carry_end = {}, consumed
+            carry_id = None
 
         record = _as_turn(record)
 
@@ -1536,6 +1557,7 @@ def turns_from(path: str, start_offset: int,
         # interrupted before any assistant text, which is rare but real.
         _give_usage(turn, _merge_usage(held, carry), model)
         held = carry = None
+        carry_id = None
         turns.append(turn)
 
     if carry is not None:
