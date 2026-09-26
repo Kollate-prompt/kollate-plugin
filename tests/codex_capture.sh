@@ -28,6 +28,13 @@ def record(role, text, ordinal, kind="input_text"):
                        "payload": {"type": "message", "role": role,
                                    "content": [{"type": kind, "text": text}]}})
 
+def token_count(total, last_input, last_cached, last_output):
+    return {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"total_tokens": total},
+        "last_token_usage": {"input_tokens": last_input, "cached_input_tokens": last_cached,
+                             "cache_write_input_tokens": 0, "output_tokens": last_output,
+                             "reasoning_output_tokens": 5, "total_tokens": last_input + last_output}}}}
+
 FIXTURE = "\n".join([
     json.dumps({"timestamp": "2026-09-07T09:00:00.000Z", "type": "session_meta",
                 "payload": {"id": "01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee",
@@ -36,6 +43,7 @@ FIXTURE = "\n".join([
     record("developer", "<skills_instructions>\nnot a person\n</skills_instructions>", 2),
     record("user", "how do I rotate the key?", 3),
     record("assistant", "Run the rotate command.", 4, "output_text"),
+    json.dumps(token_count(200, 150, 100, 30)),
     json.dumps({"timestamp": "x", "type": "response_item",
                 "payload": {"type": "reasoning", "summary": []}}),
 ]) + "\n"
@@ -49,12 +57,6 @@ with open(transcript, "w") as handle:
     handle.write(FIXTURE)
 
 print("usage, one record at a time")
-def token_count(total, last_input, last_cached, last_output):
-    return {"type": "event_msg", "payload": {"type": "token_count", "info": {
-        "total_token_usage": {"total_tokens": total},
-        "last_token_usage": {"input_tokens": last_input, "cached_input_tokens": last_cached,
-                             "cache_write_input_tokens": 0, "output_tokens": last_output,
-                             "reasoning_output_tokens": 5, "total_tokens": last_input + last_output}}}}
 tokens, model, cursor = kollate.usage_of(token_count(1000, 900, 600, 100), None)
 check("codex input is reported uncached", tokens,
       {"input_tokens": 300, "output_tokens": 100, "cache_read_tokens": 600,
@@ -432,6 +434,8 @@ if received:
     # The workspace cannot tell the two tools apart on shape alone - same fields, same
     # delivery - so the tool has to say which it is.
     check("and says which tool it came from", body.get("source"), "codex")
+    check("with the answer's usage, uncached input only",
+          body["messages"][-1].get("usage", {}).get("input_tokens"), 50)
     check("and nothing Codex wrote itself",
           any("environment_context" in m["content"] for m in body["messages"]), False)
     # The mark is written by the detached child after the POST it just made, so it can land a

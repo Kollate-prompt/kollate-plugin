@@ -33,7 +33,9 @@ FIXTURE = "\n".join([
     turn("user", "how do I rotate the key?", "u1"),
     json.dumps({"type": "assistant", "uuid": "a1", "timestamp": "2026-09-08T09:00:01.000Z",
                 "cwd": "/tmp/somewhere",
-                "message": {"role": "assistant", "content": [
+                "message": {"role": "assistant", "id": "a1-resp", "model": "claude-opus-5-5",
+                            "usage": {"input_tokens": 4, "output_tokens": 6, "cache_read_input_tokens": 50, "cache_creation_input_tokens": 0},
+                            "content": [
                     {"type": "thinking", "thinking": "never stored"},
                     {"type": "tool_use", "name": "Bash", "input": {}},
                     {"type": "text", "text": "Run the rotate command."}]}}),
@@ -266,6 +268,11 @@ if received:
     # The workspace cannot tell the two tools apart on shape alone, so the tool says which
     # it is - and this one must keep saying it even though it is the older surface.
     check("and says which tool it came from", body.get("source"), "claude_code")
+    check("with the answer's usage",
+          body["messages"][-1].get("usage"),
+          {"input_tokens": 4, "output_tokens": 6, "cache_read_tokens": 50,
+           "cache_write_tokens": 0, "api_calls": 1, "model": "claude-opus-5-5"})
+    check("and no internal keys", [k for m in body["messages"] for k in m if k.startswith("_")], [])
     check("and no thinking left in it",
           any("never stored" in m["content"] for m in body["messages"]), False)
     mark_file = os.path.join(data, "delivered.json")
