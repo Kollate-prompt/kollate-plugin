@@ -28,6 +28,13 @@ def record(role, text, ordinal, kind="input_text"):
                        "payload": {"type": "message", "role": role,
                                    "content": [{"type": kind, "text": text}]}})
 
+def token_count(total, last_input, last_cached, last_output):
+    return {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"total_tokens": total},
+        "last_token_usage": {"input_tokens": last_input, "cached_input_tokens": last_cached,
+                             "cache_write_input_tokens": 0, "output_tokens": last_output,
+                             "reasoning_output_tokens": 5, "total_tokens": last_input + last_output}}}}
+
 FIXTURE = "\n".join([
     json.dumps({"timestamp": "2026-09-07T09:00:00.000Z", "type": "session_meta",
                 "payload": {"id": "01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee",
@@ -36,6 +43,7 @@ FIXTURE = "\n".join([
     record("developer", "<skills_instructions>\nnot a person\n</skills_instructions>", 2),
     record("user", "how do I rotate the key?", 3),
     record("assistant", "Run the rotate command.", 4, "output_text"),
+    json.dumps(token_count(200, 150, 100, 30)),
     json.dumps({"timestamp": "x", "type": "response_item",
                 "payload": {"type": "reasoning", "summary": []}}),
 ]) + "\n"
@@ -47,6 +55,44 @@ transcript = os.path.join(
     day, "rollout-2026-09-07T09-00-00-01a07aac-f5b3-74c1-9fe5-c1c43e31d2ee.jsonl")
 with open(transcript, "w") as handle:
     handle.write(FIXTURE)
+
+print("usage, one record at a time")
+tokens, model, cursor = kollate.usage_of(token_count(1000, 900, 600, 100), None)
+check("codex input is reported uncached", tokens,
+      {"input_tokens": 300, "output_tokens": 100, "cache_read_tokens": 600,
+       "cache_write_tokens": 0, "api_calls": 1})
+check("codex cursor is the running total", cursor, "codex:1000")
+check("a repeated token_count is not counted twice",
+      kollate.usage_of(token_count(1000, 900, 600, 100), cursor)[0], None)
+check("a token_count with no info is ignored",
+      kollate.usage_of({"type": "event_msg", "payload": {"type": "token_count", "info": None}}, cursor),
+      (None, None, cursor))
+check("turn_context names the model",
+      kollate.usage_of({"type": "turn_context", "payload": {"model": "gpt-x"}}, cursor),
+      (None, "gpt-x", cursor))
+
+print("usage, across a transcript")
+CODEX_LOOP = [
+    {"type": "turn_context", "payload": {"model": "gpt-x"}},
+    json.loads(record("user", "fix the test", 1)),
+    token_count(500, 400, 300, 20),     # a tool call's model turn, before any answer
+    json.loads(record("assistant", "Fixed.", 2, "output_text")),
+    token_count(1100, 550, 500, 50),    # the answer's own usage, written just after it
+    token_count(1100, 550, 500, 50),    # Codex repeating itself
+]
+cl_path = os.path.join(tempfile.mkdtemp(), "loop.jsonl")  # outside the scanned tree
+with open(cl_path, "w") as handle:
+    handle.write("\n".join(json.dumps(r) for r in CODEX_LOOP) + "\n")
+ct, _, _, _ = kollate.turns_from(cl_path, 0)
+check("two stored turns", [t["role"] for t in ct], ["user", "assistant"])
+check("a person's turn carries no usage", "usage" in ct[0], False)
+check("the answer carries the calls before it and its own, each once", ct[1]["usage"],
+      {"input_tokens": 150, "output_tokens": 70, "cache_read_tokens": 800,
+       "cache_write_tokens": 0, "api_calls": 2, "model": "gpt-x"})
+check("the answer ends past everything it absorbed, at the end of the file",
+      ct[1]["_offset"], os.path.getsize(cl_path))
+resumed, _, _, _ = kollate.turns_from(cl_path, ct[1]["_offset"], ct[1]["_cursor"])
+check("a resumed read finds nothing - the absorbed token_counts are not re-read", resumed, [])
 
 print("parser")
 turns, end, title, chosen = kollate.turns_from(transcript, 0)
@@ -388,6 +434,8 @@ if received:
     # The workspace cannot tell the two tools apart on shape alone - same fields, same
     # delivery - so the tool has to say which it is.
     check("and says which tool it came from", body.get("source"), "codex")
+    check("with the answer's usage, uncached input only",
+          body["messages"][-1].get("usage", {}).get("input_tokens"), 50)
     check("and nothing Codex wrote itself",
           any("environment_context" in m["content"] for m in body["messages"]), False)
     # The mark is written by the detached child after the POST it just made, so it can land a
