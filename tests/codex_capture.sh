@@ -114,6 +114,23 @@ check("a wrapped block is scaffolding",
 check("prose mentioning a tag is not",
       kollate._codex_scaffolding([{"type": "input_text", "text": "why does <div> break here?"}]), False)
 check("an empty message is not", kollate._codex_scaffolding([]), False)
+check("the AGENTS.md block is scaffolding despite its heading",
+      kollate._codex_scaffolding([{"type": "input_text", "text":
+          "# AGENTS.md instructions for /tmp/x\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>\n<environment_context>\n</environment_context>"}]), True)
+check("a person quoting AGENTS.md is not",
+      kollate._codex_scaffolding([{"type": "input_text", "text": "why does AGENTS.md say that?"}]), False)
+
+print("Codex's own helper sessions are not conversations")
+def meta(path, source):
+    with open(path, "w") as handle:
+        handle.write(json.dumps({"type": "session_meta", "payload": {"id": "x", "source": source}}) + "\n")
+    return kollate.codex_machinery(path)
+_m = os.path.join(tempfile.mkdtemp(), "rollout.jsonl")
+check("the guardian is machinery", meta(_m, {"internal": "guardian"}), True)
+check("a spawned subagent is machinery", meta(_m, {"subagent": {"thread_spawn": {}}}), True)
+check("an interactive session is not", meta(_m, "cli"), False)
+check("an exec session is not", meta(_m, "exec"), False)
+check("a Claude transcript is not", kollate.codex_machinery(transcript + ".missing"), False)
 
 print("skill invocations are reduced to their name")
 # Invoking a Codex skill sends the whole SKILL.md as a user turn. Stored whole it buries the
