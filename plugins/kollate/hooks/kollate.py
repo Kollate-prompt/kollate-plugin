@@ -1343,6 +1343,11 @@ def _codex_scaffolding(content) -> bool:
     Narrow the rule to a tag allowlist if that ever actually happens.
     """
     text = _flatten(content).strip()
+    # The one exception to the shape: Codex prefixes the AGENTS.md block with a Markdown
+    # heading (`# AGENTS.md instructions for <cwd>`, then <INSTRUCTIONS>, often with
+    # <environment_context> glued on). Seen live 06.10: it titled every such conversation.
+    if text.startswith("# AGENTS.md instructions"):
+        return True
     if not (text.startswith("<") and text.endswith(">")):
         return False
     opening = text[1:text.find(">")] if ">" in text else ""
@@ -1738,7 +1743,7 @@ def capture_session(transcript: str, session_id: str, ignore_enrolment: bool = F
     creds = credentials()
     if not creds["capture_token"] or not creds["hook_secret"] or not creds["api_base"]:
         return
-    if not os.path.isfile(transcript):
+    if not os.path.isfile(transcript) or codex_machinery(transcript):
         return
     # Enrolment. On a machine set up with a pasted key there is no connect step to stamp it,
     # so the first captured turn stamps it instead - and that session starts from here rather
@@ -1846,6 +1851,26 @@ def codex_thread_name(session_id: str) -> str | None:
     except OSError:
         return None
     return name[:200] if name else None
+
+
+def codex_machinery(transcript: str) -> bool:
+    """Is this rollout Codex talking to itself rather than a conversation somebody had?
+
+    Codex writes its helpers as rollouts of their own - the auto-review guardian
+    (`internal: guardian`, which opens "The following is the Codex agent history whose request
+    action you are assessing"), spawned subagents, /review, memory consolidation. session_meta
+    says which: a person's session has a plain string source ("cli", "exec", "vscode"...),
+    machinery has an object. Same rule as skipping Claude's subagents/ directory. The guardian
+    one also replays tool calls and results, which capture otherwise never stores.
+    """
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as handle:
+            record = json.loads(handle.readline())
+    except (OSError, ValueError):
+        return False
+    if record.get("type") != "session_meta":
+        return False
+    return isinstance((record.get("payload") or {}).get("source"), dict)
 
 
 def source_of(transcript: str) -> str:
