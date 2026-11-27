@@ -1454,6 +1454,13 @@ def _file_item(tool: str, operation: str, path: str, cwd: str | None) -> dict:
     return item
 
 
+def _is_publish(data: dict) -> bool:
+    """Only a page publish makes an artifact. The Artifact tool's other actions (list, read, open,
+    quickstart, ...) and asset uploads also return claude.ai links, of pages this conversation did
+    not make. A publish is the default action, so a missing `action` counts."""
+    return data.get("action") in (None, "publish") and data.get("asset") is not True
+
+
 def _result_text(content) -> str:
     if isinstance(content, str):
         return content
@@ -1502,7 +1509,7 @@ def _record_artifacts(record: dict, cwd: str | None, pending: dict, seq: int | N
                 found.append({"ref": f"cowork:{data['id']}", "tool": tool,
                               "operation": "created" if tool == "create_artifact" else "edited",
                               "title": data["id"], "file_type": "html"})
-            elif tool == "Artifact" and block.get("id"):
+            elif tool == "Artifact" and block.get("id") and _is_publish(data):
                 pending[block["id"]] = (data, seq)
         if record.get("type") == "user" and block.get("type") == "tool_result" \
                 and block.get("tool_use_id") in pending:

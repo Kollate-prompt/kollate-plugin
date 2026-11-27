@@ -130,6 +130,25 @@ class Transcript(unittest.TestCase):
         self.assertEqual(got[0]["url"], "https://claude.ai/code/artifact/ab-1")
         self.assertNotIn("SECRET", json.dumps(turns))
 
+    def test_only_a_publish_records_a_link(self):
+        def result(id_, text):
+            return {"type": "user", "cwd": "/Users/d/p", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": id_, "content": text}]}}
+        p = self.write([
+            say("user", "show me my pages"),
+            tool_use("Artifact", {"action": "list"}, id_="l1"), result("l1", "https://claude.ai/code/artifact/old-1"),
+            tool_use("Artifact", {"action": "read", "url": "https://claude.ai/code/artifact/old-2"}, id_="r1"),
+            result("r1", "https://claude.ai/code/artifact/old-2"),
+            tool_use("Artifact", {"url": "https://claude.ai/code/artifact/old-2", "file_path": "/Users/d/p/a.png",
+                                  "asset": True}, id_="u1"),
+            result("u1", "https://claude.ai/code/artifact/old-2"),
+            tool_use("Artifact", {"action": "publish", "file_path": "/Users/d/p/new.html"}, id_="p1"),
+            result("p1", "https://claude.ai/code/artifact/new-3"),
+            say("assistant", "here"),
+        ])
+        turns, *_ = kollate.turns_from(p, 0)
+        self.assertEqual([a["ref"] for a in turns[-1]["artifacts"]], ["https://claude.ai/code/artifact/new-3"])
+
     def test_codex_transcript(self):
         meta = {"type": "session_meta", "payload": {"cwd": "/Users/d/p"}}
         patch = {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec",

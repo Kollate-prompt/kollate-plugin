@@ -44,6 +44,29 @@
     ]
   },
   {
+    "name": "only an Artifact publish records a link; list, read, open, quickstart and asset uploads do not",
+    "cwd": "/Users/dana/proj",
+    "records": [
+      { "seq": 40, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "tool_use", "id": "l1", "name": "Artifact", "input": { "action": "list" } } ] } } },
+      { "seq": 41, "record": { "type": "user", "cwd": "/Users/dana/proj", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "l1", "content": "Weekly report - https://claude.ai/code/artifact/other-1" } ] } } },
+      { "seq": 42, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "tool_use", "id": "r1", "name": "Artifact", "input": { "action": "read", "url": "https://claude.ai/code/artifact/other-2" } } ] } } },
+      { "seq": 43, "record": { "type": "user", "cwd": "/Users/dana/proj", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "r1", "content": "Read https://claude.ai/code/artifact/other-2" } ] } } },
+      { "seq": 44, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "tool_use", "id": "o1", "name": "Artifact", "input": { "action": "open", "url": "https://claude.ai/code/artifact/other-3" } } ] } } },
+      { "seq": 45, "record": { "type": "user", "cwd": "/Users/dana/proj", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "o1", "content": "Opened https://claude.ai/code/artifact/other-3" } ] } } },
+      { "seq": 46, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "tool_use", "id": "q1", "name": "Artifact", "input": { "action": "quickstart", "intent": "other" } } ] } } },
+      { "seq": 47, "record": { "type": "user", "cwd": "/Users/dana/proj", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "q1", "content": "Start from https://claude.ai/artifacts/type-4" } ] } } },
+      { "seq": 48, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "tool_use", "id": "u1", "name": "Artifact", "input": { "url": "https://claude.ai/code/artifact/0b1c-22", "file_path": "/Users/dana/proj/logo.png", "asset": true } } ] } } },
+      { "seq": 49, "record": { "type": "user", "cwd": "/Users/dana/proj", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "u1", "content": "Uploaded to https://claude.ai/code/artifact/0b1c-22" } ] } } },
+      { "seq": 50, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "tool_use", "id": "p2", "name": "Artifact", "input": { "file_path": "/Users/dana/proj/notes.html" } } ] } } },
+      { "seq": 51, "record": { "type": "user", "cwd": "/Users/dana/proj", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "p2", "content": "Published: https://claude.ai/code/artifact/new-5" } ] } } },
+      { "seq": 52, "record": { "type": "assistant", "cwd": "/Users/dana/proj", "message": { "role": "assistant", "content": [ { "type": "text", "text": "Published your notes." } ] } } }
+    ],
+    "turn_seqs": [52],
+    "expected": [
+      { "anchor_seq": 52, "ref": "https://claude.ai/code/artifact/new-5", "tool": "Artifact", "operation": "created", "url": "https://claude.ai/code/artifact/new-5", "title": "notes.html", "file_type": "html" }
+    ]
+  },
+  {
     "name": "code files are still emitted; the server discards them",
     "cwd": "/Users/dana/proj",
     "records": [
