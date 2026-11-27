@@ -27,7 +27,7 @@ main() {
   for suite in endpoint_resolution.sh claude_capture.sh codex_capture.sh live_transcripts.sh codex_sandbox.sh hook_budget.sh; do
     run "$suite" || rc=1
   done
-  for suite in profile_gate.py profile_gate_e2e.py; do
+  for suite in profile_gate.py profile_gate_e2e.py test_artifacts.py; do
     echo; echo "=== $suite"; python3 "tests/$suite" || rc=1
   done
   echo
