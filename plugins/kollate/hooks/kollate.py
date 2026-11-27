@@ -20,6 +20,7 @@ import hmac
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1413,6 +1414,173 @@ def _as_turn(record: dict) -> dict:
     }
 
 
+# ------------------------------------------------------------------------------ artifacts
+#
+# Artifact metadata (docs/artifacts-spec.md, kollate-product): what the AI made or showed, as
+# names and links only - never a file body. A direct port of extension/lib/artifacts.ts; the
+# shared fixtures (tests/fixtures/artifact-rules.fixtures.json) pin both to the same output.
+# Code files are emitted too: the server decides what is worth keeping (decision D1).
+
+_MCP_PREFIX = re.compile(r"^mcp__.+?__")
+_EXT = re.compile(r"\.([A-Za-z0-9]{1,20})$")
+_ARTIFACT_LINK = re.compile(r"https://claude\.ai/[A-Za-z0-9/_-]*artifacts?/[A-Za-z0-9_-]+")
+_PATCH_HEADER = re.compile(r"\*\*\* (Add|Update|Delete) File: ([^\n\\\"]+)")
+_PATCH_HEADER_DECODED = re.compile(r"\*\*\* (Add|Update|Delete) File: ([^\n\"]+)")
+_PATCH_OPERATION = {"Add": "created", "Update": "edited", "Delete": "deleted"}
+
+
+def _artifact_rel(path: str, cwd: str | None = None) -> str:
+    """Relative to the working folder; anything outside it keeps only its file name, so a home
+    directory is never sent."""
+    if cwd:
+        base = cwd.rstrip("/") + "/"
+        if path.startswith(base):
+            return path[len(base):]
+    parts = [p for p in re.split(r"[/\\]", path) if p]
+    return parts[-1] if parts else path
+
+
+def _artifact_ext(path: str) -> str | None:
+    found = _EXT.search(path)
+    return found.group(1).lower() if found else None
+
+
+def _file_item(tool: str, operation: str, path: str, cwd: str | None) -> dict:
+    rel = _artifact_rel(path, cwd)
+    item = {"ref": rel, "tool": tool, "operation": operation, "path": rel}
+    kind = _artifact_ext(rel)
+    if kind:
+        item["file_type"] = kind
+    return item
+
+
+def _is_publish(data: dict) -> bool:
+    """Only a page publish makes an artifact. The Artifact tool's other actions (list, read, open,
+    quickstart, ...) and asset uploads also return claude.ai links, of pages this conversation did
+    not make. A publish is the default action, so a missing `action` counts."""
+    return data.get("action") in (None, "publish") and data.get("asset") is not True
+
+
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(b["text"]) if isinstance(b, dict) and "text" in b else "" for b in content)
+    return ""
+
+
+def _record_artifacts(record: dict, cwd: str | None, pending: dict, seq: int | None = None) -> list[dict]:
+    """Artifacts in one Claude Code transcript record, without an anchor.
+
+    `pending` holds `Artifact` publishes still waiting for their tool_result (the link is only
+    there); the caller keeps it across records. Given `seq`, a published artifact carries the
+    seq of its publish call as `_seq`, so it anchors where it was made, not where its result
+    came back.
+    """
+    found: list[dict] = []
+    message = record.get("message") if isinstance(record.get("message"), dict) else {}
+    content = message.get("content")
+    if not isinstance(content, list):
+        return found
+    cwd = record.get("cwd") or cwd
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if record.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("name"):
+            tool = _MCP_PREFIX.sub("", str(block["name"]))
+            data = block.get("input") if isinstance(block.get("input"), dict) else {}
+            if tool == "Write" and isinstance(data.get("file_path"), str):
+                found.append(_file_item(tool, "created", data["file_path"], cwd))
+            elif tool in ("Edit", "MultiEdit") and isinstance(data.get("file_path"), str):
+                found.append(_file_item(tool, "edited", data["file_path"], cwd))
+            elif tool == "NotebookEdit" and isinstance(data.get("notebook_path"), str):
+                found.append(_file_item(tool, "edited", data["notebook_path"], cwd))
+            elif tool == "SendUserFile" and isinstance(data.get("files"), list):
+                found.extend(_file_item(tool, "presented", f, cwd) for f in data["files"] if isinstance(f, str))
+            elif tool == "present_files":
+                if isinstance(data.get("files"), list):
+                    paths = [f.get("file_path") if isinstance(f, dict) else f for f in data["files"]]
+                elif isinstance(data.get("filepaths"), list):
+                    paths = data["filepaths"]
+                else:
+                    paths = []
+                found.extend(_file_item("present_files", "presented", f, cwd) for f in paths if isinstance(f, str))
+            elif tool in ("create_artifact", "update_artifact") and isinstance(data.get("id"), str):
+                found.append({"ref": f"cowork:{data['id']}", "tool": tool,
+                              "operation": "created" if tool == "create_artifact" else "edited",
+                              "title": data["id"], "file_type": "html"})
+            elif tool == "Artifact" and block.get("id") and _is_publish(data):
+                pending[block["id"]] = (data, seq)
+        if record.get("type") == "user" and block.get("type") == "tool_result" \
+                and block.get("tool_use_id") in pending:
+            data, used_at = pending.pop(block["tool_use_id"])
+            link = _ARTIFACT_LINK.search(_result_text(block.get("content")))
+            if link:
+                item = {"ref": link.group(0), "tool": "Artifact", "operation": "created", "url": link.group(0)}
+                if used_at is not None:
+                    item["_seq"] = used_at
+                if isinstance(data.get("file_path"), str):
+                    item["title"] = _artifact_rel(data["file_path"])
+                    kind = _artifact_ext(data["file_path"])
+                    if kind:
+                        item["file_type"] = kind
+                found.append(item)
+    return found
+
+
+def codex_artifacts(record: dict, cwd: str | None) -> list[dict]:
+    """One item per `*** Add/Update/Delete File:` header in a Codex tool call's patch text.
+
+    Files written by shell commands (`cat > x`) leave no such header and are not seen.
+    """
+    payload = record.get("payload") if record.get("type") == "response_item" else None
+    if not isinstance(payload, dict) or payload.get("type") not in ("custom_tool_call", "function_call"):
+        return []
+    text = payload.get("input") if payload.get("type") == "custom_tool_call" else payload.get("arguments")
+    if not isinstance(text, str) or "*** " not in text:
+        return []
+    pattern = _PATCH_HEADER
+    try:
+        decoded = json.loads(text)
+        if isinstance(decoded, dict):
+            # function_call arguments are JSON: decode so a Windows path keeps its backslashes.
+            text = "\n".join(v for v in decoded.values() if isinstance(v, str))
+            pattern = _PATCH_HEADER_DECODED
+    except ValueError:
+        pass
+    out = []
+    for kind, raw in pattern.findall(text):
+        path = raw.strip()
+        if not path:
+            continue
+        # A patch path is usually already relative to the working folder: keep it that way.
+        # Anything absolute is made relative to the folder, or loses its folders (no home dir).
+        if not re.match(r"^(/|~|[A-Za-z]:[/\\]|\.\.)", path):
+            item = _file_item("apply_patch", _PATCH_OPERATION[kind], path, None)
+            item["ref"] = item["path"] = path.replace("\\", "/")
+        else:
+            item = _file_item("apply_patch", _PATCH_OPERATION[kind], path, cwd)
+        out.append(item)
+    return out
+
+
+def artifacts_from(records: list[tuple[int, dict]], turn_seqs: list[int]) -> list[dict]:
+    """Claude Code transcript records -> wire items, each anchored to the first stored turn whose
+    seq is >= the record's seq. Items after the last stored turn are left for the next read."""
+    found: list[tuple[int, dict]] = []
+    pending: dict = {}
+    for seq, record in sorted(records, key=lambda pair: pair[0]):
+        for item in _record_artifacts(record if isinstance(record, dict) else {}, None, pending, seq):
+            found.append((item.pop("_seq", seq), item))
+    turns = sorted(turn_seqs)
+    out = []
+    for seq, item in found:
+        anchor = next((t for t in turns if t >= seq), None)
+        if anchor is not None:
+            out.append({**item, "anchor_seq": anchor})
+    return out
+
+
 def _give_usage(turn: dict, tokens: dict | None, model: str | None) -> None:
     """Add `tokens` to a turn's usage, naming the model last seen."""
     usage = _merge_usage(turn.get("usage"), tokens)
@@ -1471,6 +1639,9 @@ def turns_from(path: str, start_offset: int,
     carry: dict | None = None    # usage on the record just read, until we know if it is a turn
     carry_end = start_offset
     carry_id: str | None = None  # the Claude message.id the carry came from; None for Codex
+    found: list[dict] = []       # artifacts seen since the last stored turn
+    awaiting: dict = {}          # `Artifact` publishes whose result (the link) is still to come
+    working_dir: list[str] = []  # the session's folder, read from the transcript once, if needed
     try:
         with open(path, "rb") as handle:
             handle.seek(start_offset)
@@ -1523,6 +1694,15 @@ def turns_from(path: str, start_offset: int,
             carry, carry_end = {}, consumed
             carry_id = None
 
+        # Artifacts live in tool calls, which are not turns. Collect them here, from the raw
+        # record, and let the next stored turn carry them (metadata only; no file body).
+        if record.get("type") == "response_item":
+            if not working_dir:
+                working_dir.append(transcript_cwd(path))
+            found.extend(codex_artifacts(record, working_dir[0]))
+        else:
+            found.extend(_record_artifacts(record, None, awaiting))
+
         record = _as_turn(record)
 
         # `/rename` writes `custom-title`; Claude's own naming writes `ai-title`. They are not
@@ -1563,10 +1743,16 @@ def turns_from(path: str, start_offset: int,
         _give_usage(turn, _merge_usage(held, carry), model)
         held = carry = None
         carry_id = None
+        if found:
+            turn["artifacts"], found = found, []
         turns.append(turn)
 
     if carry is not None:
         _settle(turns, carry, carry_end, cursor, model)
+
+    # A tool call after the last stored text still belongs to this delivery.
+    if found and turns:
+        turns[-1].setdefault("artifacts", []).extend(found)
 
     # Older transcripts predate `ai-title` entirely. Rather than leave those permanently
     # "Untitled", name them from the opening question - which is what a person would have
@@ -1617,7 +1803,13 @@ def deliver(session_id: str, messages: list[dict], creds: dict, title: str | Non
     """POST one delta. True only on a confirmed 2xx - that is what moves the watermark."""
     # A server that predates two surfaces ignores this field, so it is safe to send before the
     # workspace understands it; one that knows it refuses any value but the two it knows.
+    # Artifact metadata rides on the turn it is anchored to inside the plugin; on the wire it is
+    # one top-level list beside `messages`. A server that predates it ignores the field.
+    artifacts = [{**a, "anchor_seq": m["seq"]} for m in messages for a in m.get("artifacts") or []]
+    messages = [{k: v for k, v in m.items() if k != "artifacts"} for m in messages]
     payload = {"session_id": session_id, "messages": messages, "source": source}
+    if artifacts:
+        payload["artifacts"] = artifacts
     if title:
         payload["title"] = title
         # A name somebody typed with /rename must not be undone by the automatic one on the
