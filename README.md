@@ -64,6 +64,13 @@ To the Kollate workspace you signed in to, attributed to you. Your organisation'
 read your captured conversations - that is what "organisational memory" means, and it is
 worth knowing rather than discovering.
 
+## Add a saved conversation to Brain
+
+Run `/kollate:brain` in Claude Code or `$kollate:brain` in Codex. Open the link, choose a brain,
+and confirm. To keep the conversation out of one brain, use `/kollate:no-brain` or
+`$kollate:no-brain`. These commands use your signed-in Kollate account and the conversation
+already saved there.
+
 ## Turning it off
 
 Disconnect the machine from **Connect** in Kollate. It stops being accepted immediately, on
