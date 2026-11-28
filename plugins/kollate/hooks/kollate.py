@@ -699,7 +699,7 @@ def capture_blocked(session_id: str) -> str:
     return ""
 
 
-def this_session() -> str:
+def this_session(*, strict: bool = False) -> str:
     """The id of the session this command was typed in, whichever tool that is.
 
     Each names it differently, and pausing "this session" in the tool that does not set
@@ -710,14 +710,35 @@ def this_session() -> str:
     # Order by the tool this copy was loaded by, not by whichever variable happens to be set:
     # a Codex session started from inside a Claude Code one inherits CLAUDE_CODE_SESSION_ID,
     # and taking that first paused the wrong session entirely (seen doing it, 2026-09-10).
-    names = ("CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID")
-    if host() != "codex":
-        names = ("CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    codex_names = ("CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    claude_names = ("CLAUDE_CODE_SESSION_ID",)
+    current, other = (codex_names, claude_names) if host() == "codex" else (claude_names, codex_names)
+    names = current if strict else current + other
     for name in names:
         value = os.environ.get(name, "").strip()
         if value:
             return value
     return ""
+
+
+def cmd_brain(action: str, explicit_session: str = "") -> int:
+    """Print a link to the signed-in chooser. This works in a network-disabled skill."""
+    client = host()
+    endpoint = safe_api_base(credentials()["endpoint"])
+    if not endpoint:
+        print(f"{KMARK}Could not find your Kollate workspace address. Run {command('connect')} first.")
+        return 0
+    pattern = r"[A-Za-z0-9_-]{8,160}"
+    session = explicit_session if re.fullmatch(pattern, explicit_session) else this_session(strict=True)
+    if not re.fullmatch(pattern, session):
+        print(f"{KMARK}Could not identify this conversation. Open it in Kollate and use Add to Brain, "
+              f"or manage its exclusions from a brain: {endpoint}/app/brain")
+        return 0
+
+    fragment = urllib.parse.urlencode({"source": client, "session": session, "action": action})
+    verb = "Add this conversation to a brain" if action == "add" else "Exclude this conversation from a brain"
+    print(f"{KMARK}{verb}: {endpoint}/brain-action#{fragment}")
+    return 0
 
 
 def cmd_pause(scope: str) -> int:
@@ -2359,6 +2380,10 @@ def state_unwritable(verb: str, problem: OSError) -> int:
 
 def main() -> int:
     verb = sys.argv[1] if len(sys.argv) > 1 else "capture"
+
+    if verb in ("brain", "no-brain"):
+        explicit_session = sys.argv[2] if len(sys.argv) == 3 and host() == "claude_code" else ""
+        return cmd_brain("add" if verb == "brain" else "exclude", explicit_session)
 
     if verb == "capture":
         note_hook_ran()
